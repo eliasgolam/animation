@@ -13,7 +13,7 @@
     "@expo/vector-icons": "^14.1.0",
     "@shopify/react-native-skia": "v2.0.0-next.4",
     "expo-dev-client": "~5.2.4",
-    "expo": "~53.0.0",
+    "expo": "53.0.22",
     "expo-av": "~15.1.7",
     "expo-status-bar": "~2.2.3",
     "hermes-parser": "^0.31.0",
@@ -22,7 +22,8 @@
     "react-native": "^0.79.5",
     "react-native-reanimated": "~3.17.4",
     "react-native-web": "^0.20.0",
-    "expo-font": "~13.3.2"
+    "expo-font": "~13.3.2",
+    "expo-audio": "~0.4.9"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

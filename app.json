@@ -41,7 +41,8 @@
           "microphonePermission": "Diese App benötigt Zugriff auf das Mikrofon für die Audioaufnahme."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-audio"
     ]
   }
 }
