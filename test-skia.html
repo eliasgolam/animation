@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skia Web Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #000;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        .test-info {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            z-index: 1000;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #007AFF;
+        }
+        .status {
+            margin: 10px 0;
+            padding: 5px;
+            border-radius: 4px;
+        }
+        .success { background: #28a745; }
+        .error { background: #dc3545; }
+        .info { background: #007AFF; }
+    </style>
+</head>
+<body>
+    <div class="test-info">
+        <h3>Skia Web Test</h3>
+        <div class="status info">Testing @shopify/react-native-skia in Web</div>
+        <div class="status info">URL: <a href="http://localhost:8081" target="_blank" style="color: #5AC8FA;">http://localhost:8081</a></div>
+        <div class="status info">Expected: Animated blue circles with gradients</div>
+        <div class="status info">If you see circles moving, Skia is working!</div>
+    </div>
+
+    <script>
+        // Test if the page loads without errors
+        window.addEventListener('load', function() {
+            console.log('Skia Web Test Page Loaded');
+            console.log('Navigate to http://localhost:8081 to see the Skia animation');
+        });
+    </script>
+</body>
+</html>

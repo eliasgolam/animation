@@ -1,123 +1,97 @@
-# Siri Animation Test
+# Siri-like Audio-Reactive Visualization
 
-Ein React Native + Expo Projekt mit Skia-Animationen für eine Siri-ähnliche Benutzeroberfläche.
+A React Native project featuring a Siri-like, audio-reactive visualization built with TypeScript and @shopify/react-native-skia.
 
 ## Features
 
-- 🎨 Skia-basierte Wellen-Animationen mit Glow-Effekten
-- 🎤 Mikrofonzugriff und Audioaufnahme
-- 📱 Responsive Design für iOS und Android
-- 🌊 Echtzeit-Amplitudenvisualisierung
-- ⚡ Smooth Animationen mit Farbverläufen
+- **Frame-based Animation**: Uses Skia's `useFrameCallback` for smooth 60fps animations
+- **Audio-Reactive**: Responds to amplitude changes in real-time
+- **Authentic Siri Look**: Replicates Apple's Siri interface with organic blob animations
+- **TypeScript**: Fully typed with no `any` types
+- **Modular Architecture**: Clean separation of concerns with dedicated modules
+
+## Project Structure
+
+```
+src/
+├── components/
+│   └── SiriSkia.tsx          # Main visualization component
+├── constants/
+│   └── theme.ts              # Colors, animation config, blob configs
+├── lib/
+│   ├── math/
+│   │   ├── noise.ts          # Perlin noise implementation
+│   │   └── spline.ts         # Catmull-Rom spline utilities
+│   └── animation/
+│       └── easing.ts         # Easing functions
+```
+
+## Technologies
+
+- **React Native**: Cross-platform mobile development
+- **TypeScript**: Type-safe development
+- **@shopify/react-native-skia**: High-performance 2D graphics
+- **react-native-reanimated**: Smooth animations
 
 ## Installation
 
-### Voraussetzungen
-
-- Node.js (Version 16 oder höher)
-- npm oder yarn
-- Expo CLI
-- Android Studio (für Android-Entwicklung)
-- Xcode (für iOS-Entwicklung, nur auf macOS)
-
-### Setup
-
-1. **Dependencies installieren:**
+1. Clone the repository
+2. Install dependencies:
    ```bash
    npm install
    ```
-
-2. **Expo CLI installieren (falls noch nicht vorhanden):**
-   ```bash
-   npm install -g @expo/cli
-   ```
-
-3. **Projekt starten:**
+3. Start the development server:
    ```bash
    npx expo start
    ```
 
-## Verwendung
+## Usage
 
-1. Starte das Projekt mit `npx expo start`
-2. Scanne den QR-Code mit der Expo Go App auf deinem Smartphone
-3. Oder drücke `a` für Android Emulator oder `i` für iOS Simulator
-4. Tippe auf "Aufnahme starten" um die Animation zu aktivieren
-5. Die Animation reagiert auf die Amplitude des Mikrofons
+The main component `SiriSkia` accepts the following props:
 
-## Projektstruktur
-
-```
-SiriAnimationTest/
-├── App.tsx                 # Haupt-App-Komponente
-├── components/
-│   └── SiriSkia.tsx       # Skia-Animation-Komponente
-├── screens/
-│   └── SiriScreen.tsx     # Haupt-Screen mit Mikrofonzugriff
-├── assets/                # Bilder und Assets
-├── package.json           # Dependencies
-├── app.json              # Expo-Konfiguration
-└── tsconfig.json         # TypeScript-Konfiguration
+```typescript
+interface SiriSkiaProps {
+  amplitude: number;      // Audio amplitude (0-100)
+  isRunning?: boolean;    // Animation state
+  isDarkMode?: boolean;   // Theme preference
+}
 ```
 
-## Technologien
+## Key Features
 
-- **React Native**: Cross-platform mobile development
-- **Expo**: Development platform und Build-Tools
-- **Skia**: 2D Graphics Engine für Animationen
-- **Expo AV**: Audio/Video Funktionalität
-- **TypeScript**: Type safety
+### Frame-Based Animation
+- Uses `useFrameCallback` instead of `setInterval`
+- Smooth 60fps animations
+- Efficient rendering with Skia
 
-## Berechtigungen
+### Audio Reactivity
+- Real-time amplitude response
+- Breathing animation tied to audio input
+- Blob scaling based on amplitude
 
-Die App benötigt folgende Berechtigungen:
+### Authentic Siri Design
+- Organic blob shapes using Perlin noise
+- Catmull-Rom splines for smooth curves
+- Authentic Siri color palette
+- 3D rotation and perspective effects
 
-- **Mikrofon**: Für Audioaufnahme und Amplitudenanalyse
-- **Android**: `RECORD_AUDIO` Permission
-- **iOS**: `NSMicrophoneUsageDescription` in Info.plist
+### Performance Optimized
+- Memoized calculations with `useComputedValue`
+- Efficient path generation
+- Optimized rendering pipeline
 
-## Entwicklung
+## Development
 
-### Debugging
+### Adding New Blobs
+1. Add configuration to `BLOB_CONFIGS` in `theme.ts`
+2. Blobs automatically integrate with the animation system
 
-- Verwende `console.log()` für Debugging
-- Expo DevTools für Performance-Monitoring
-- React Native Debugger für erweiterte Debugging-Features
+### Customizing Colors
+Modify `SIRI_COLORS` in `theme.ts` to change the visual appearance.
 
-### Customization
+### Animation Parameters
+Adjust `ANIMATION_CONFIG` in `theme.ts` to fine-tune animation behavior.
 
-Die Animation kann angepasst werden durch:
+## License
 
-- Ändern der Farben in `SiriSkia.tsx`
-- Anpassen der Wellen-Parameter
-- Modifizieren der Animation-Geschwindigkeit
-- Hinzufügen neuer Effekte
-
-## Troubleshooting
-
-### Häufige Probleme
-
-1. **Metro bundler startet nicht:**
-   ```bash
-   npx expo start --clear
-   ```
-
-2. **Dependencies Probleme:**
-   ```bash
-   rm -rf node_modules
-   npm install
-   ```
-
-3. **iOS Build Fehler:**
-   ```bash
-   npx expo run:ios --clear
-   ```
-
-4. **Android Build Fehler:**
-   ```bash
-   npx expo run:android --clear
-   ```
-
-## Lizenz
-
-MIT License - siehe LICENSE Datei für Details. 
+MIT License 

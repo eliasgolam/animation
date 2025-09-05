@@ -45,17 +45,17 @@ export default function AudioVisualizer({ audioLevels, isActive, isDarkMode = tr
       const path = Skia.Path.Make();
       path.addRect({ x, y, width: barWidth - 2, height });
 
-      // Dynamic colors based on level and mode
+      // Static colors to avoid gradient array mismatch
       const colors = isDarkMode 
         ? [
-            `rgba(0, 255, 255, ${0.3 + level * 0.7})`,
-            `rgba(68, 170, 255, ${0.2 + level * 0.6})`,
-            `rgba(170, 68, 255, ${0.1 + level * 0.5})`,
+            'rgba(0, 255, 255, 0.5)',
+            'rgba(68, 170, 255, 0.4)',
+            'rgba(170, 68, 255, 0.3)',
           ]
         : [
-            `rgba(33, 150, 243, ${0.3 + level * 0.7})`,
-            `rgba(156, 39, 176, ${0.2 + level * 0.6})`,
-            `rgba(255, 87, 34, ${0.1 + level * 0.5})`,
+            'rgba(33, 150, 243, 0.5)',
+            'rgba(156, 39, 176, 0.4)',
+            'rgba(255, 87, 34, 0.3)',
           ];
 
       bars.push(
@@ -64,6 +64,7 @@ export default function AudioVisualizer({ audioLevels, isActive, isDarkMode = tr
             c={vec(x + barWidth / 2, y + height / 2)}
             r={height / 2}
             colors={colors}
+            positions={[0.0, 0.5, 1.0]}
           />
         </Path>
       );

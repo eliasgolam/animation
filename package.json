@@ -4,14 +4,15 @@
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "dependencies": {
     "@expo/metro-runtime": "~5.0.4",
     "@expo/vector-icons": "^14.1.0",
-    "@shopify/react-native-skia": "^2.0.0-next.4",
+    "@shopify/react-native-skia": "v2.0.0-next.4",
+    "expo-dev-client": "~5.2.4",
     "expo": "~53.0.0",
     "expo-av": "~15.1.7",
     "expo-status-bar": "~2.2.3",
@@ -20,7 +21,8 @@
     "react-dom": "^19.0.0",
     "react-native": "^0.79.5",
     "react-native-reanimated": "~3.17.4",
-    "react-native-web": "^0.20.0"
+    "react-native-web": "^0.20.0",
+    "expo-font": "~13.3.2"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
