@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, Text, StatusBar } from 'react-native';
 import SiriSkia from '../src/components/SiriSkia';
+import VoiceAnimation from '../components/VoiceAnimation';
+import TestSkia from '../src/components/TestSkia';
 
 // Test-Amplitude (ersetzbar durch Mic-Hook)
 function useTestAmp() {
@@ -18,8 +20,9 @@ export default function SiriMicDemo() {
     <View style={{ flex: 1, backgroundColor: '#0B1020' }}>
       <StatusBar barStyle="light-content" />
       <SiriSkia amplitude={amp} isRunning isDarkMode />
+      {/* <VoiceAnimation /> */}
       <Text style={{ position: 'absolute', top: 50, alignSelf: 'center', color: '#9ecbff' }}>
-        Amp: {Math.round(amp)}
+        Siri Animation - Amp: {Math.round(amp)}
       </Text>
     </View>
   );

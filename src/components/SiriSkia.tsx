@@ -1,2169 +1,1134 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Dimensions } from 'react-native';
-import { Canvas, Path, Skia, RadialGradient, vec, Group, Circle, SweepGradient } from '@shopify/react-native-skia';
-import { ANIMATION_CONFIG, BLOB_CONFIGS, SIRI_COLORS, defaultBackground } from '../constants/theme';
-import type { SkPath } from '@shopify/react-native-skia';
-import { makePerlin } from '../lib/math/noise';
-import { createClosedCatmullRomPath } from '../lib/math/spline';
-import { clamp, smoothstep, expSlew } from '../lib/animation/easing';
-// SiriRing components not needed anymore - using direct SweepGradient implementation
+import { Canvas, Circle, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader, Fill, Paint, Shader } from '@shopify/react-native-skia';
 
-// === Siri Gradient Constants (exakt für Hintergrundkreis) ===
-// Farbpalette: Cyan → Teal → Azure → Indigo → Magenta → Crimson (Siri-typisch)
-
-// Static Ring-Farben (no dynamic functions to avoid gradient issues)
-
-export const SIRI_RING_COLORS: string[] = [
-  'rgba(0, 214, 255, 0.60)',
-  'rgba(0, 200, 238, 0.60)',
-  'rgba(60, 160, 255, 0.55)',
-  'rgba(46, 40, 120, 0.50)',
-  'rgba(126, 32, 168, 0.50)',
-  'rgba(196, 32, 120, 0.50)',
-  'rgba(210, 32, 80, 0.45)',
-  'rgba(0, 0, 0, 0.00)'
-];
-
-export const SIRI_RING_POS: number[] = [0.80, 0.90, 0.945, 0.97, 0.985, 0.993, 0.998, 1.0];
-
-// Zentraler Bloom (breit, aber dezent; vermeidet Clip im Zentrum)
-export const SIRI_BLOOM_COLORS: string[] = [
-  'rgba(235, 245, 255, 0.075)',
-  'rgba(170, 215, 255, 0.045)',
-  'rgba(160, 90, 210, 0.037)',
-  'rgba(0, 0, 0, 0.00)'
-];
-
-export const SIRI_BLOOM_POS: number[] = [0.00, 0.46, 0.82, 1.00];
-
-// Basisfüllung – deutlich heller innen, dunkler nur am Rand
-export const SIRI_BASE_COLORS: string[] = [
-  'rgba(18,22,42,0.00)',   // Mitte nahezu transparent
-  'rgba(26,30,50,0.18)',
-  'rgba(24,28,44,0.32)',
-  'rgba(22,26,40,0.44)'    // äußerer Rand am dunkelsten
-];
-
-export const SIRI_BASE_POS: number[] = [0.00, 0.62, 0.82, 1.00];
-
-// Static Gate-Farben (no dynamic functions to avoid gradient issues)
-
-export const SIRI_GATE_COLORS: string[] = [
-  'rgba(0,0,0,0.18)',
-  'rgba(0,0,0,0.12)',
-  'rgba(0,0,0,0.00)'
-];
-
-export const SIRI_GATE_POS: number[] = [0.00, 0.66, 1.00];
-
-// Tuning-Settings (für Feineinstellung via Props/State falls gewünscht)
-export const SIRI_FALLOFF_SETTINGS = {
-  gateRadiusK: 0.70,
-  bloomOpacity: 0.08,      // war 0.08
-  ringRadiusK: 0.92,       // Hintergrund-Ring Radius-Faktor
-  spotsOpacity: 0.30,      // Wandering Spots
-  edgeOpacity: 0.22,       // Orbiting Edge Highlight
-  
-  // Feintuning-Optionen
-  gateAlphaBoost: 0.24,
-  ringAlphaBoost: 0.02     // SIRI_RING_COLORS Alpha-Boost für mehr Farbe im Hintergrund
-};
-
-export interface SiriSkiaProps {
+interface SiriSkiaProps {
   amplitude: number;
-  isRunning?: boolean;
-  isDarkMode?: boolean;
+  isRunning: boolean;
+  isDarkMode: boolean;
 }
 
-// Debug-System für Layer-Toggles - Baseline-Modus
-const DEBUG_LAYERS = {
-  backdrop: false,      // DEAKTIVIERT für Baseline
-  base: true,           // Basis-Kreis aktiv
-  gate: false,          // Gate deaktiviert
-  coreFlash: false,     // DEAKTIVIERT für Baseline
-  caustics: false,      // DEAKTIVIERT für Baseline
-  sweepGradient: false, // Sweep deaktiviert (lokaler Sweep für Blob)
-  neonRing: false,      // DEAKTIVIERT für Baseline
-  cyanHalo: false,      // DEAKTIVIERT für Baseline
-  bloom: false,         // Bloom deaktiviert
-  spots: false,         // DEAKTIVIERT für Baseline
-  petals: false,        // DEAKTIVIERT für Baseline
-  edgeHighlight: false, // DEAKTIVIERT für Baseline
-  grain: false          // DEAKTIVIERT für Baseline
-};
+export default function SiriSkia({ amplitude, isRunning, isDarkMode }: SiriSkiaProps) {
+  // Default-Design ohne Bewegung/Audio
+  const DEFAULT_STATE = true;
 
-interface BlobPosition {
-  blobId: number;
-  x: number;
-  y: number;
-  z: number;
-  depthScale: number;
-  depthOpacity: number;
-  color: {r: number, g: number, b: number, h: number, s: number, l: number};
-  isVisible: boolean;
-}
+  // Siri-Strict Preset für optimale Siri-Authentizität
+  const SIRI_STRICT_PRESET = {
+    tipStart: 0.74, tipEnd: 0.992, tipPow: 1.60, domPow: 1.40,
+    coreStrength: 0.35, coreR1Mul: 0.10, coreR2Mul: 0.16,
+    idle_thresh: 0.58, idle_soft: 0.045,
+  };
 
-interface Point3D {
-  x: number;
-  y: number;
-  z: number;
-}
-
-interface BlobConfig {
-  colorKey: string;
-  size: number;
-  phases: number[];
-  frequencies: number[];
-  amplitudes: number[];
-  speeds: number[];
-  rotationSpeed: number;
-  breathingFreq: number;
-  breathingAmp: number;
-  seed: number;
-}
-
-interface BlobData {
-  index: number;
-  blobId: number;
-  position: BlobPosition;
-  blob: BlobConfig;
-  path: SkPath;
-  finalRadius: number;
-  adjustedX: number;
-  adjustedY: number;
-  depthOpacity: number;
-}
-
-// Screen dimensions
 const { width, height } = Dimensions.get('window');
 const centerX = width / 2;
-const centerY = height * 0.5;
+  const centerY = height / 2;
+  
+  // Siri Strict Switches
+  const SIRI_STRICT = true;
+  const SHOW_SLICES = false;   // OG Siri: keine Slices/Ribbons
+  const SHOW_AO = false;       // Ambient Occlusion ausschalten
+  
+  // Siri Sweep Palette (statisch, nicht zeitbasiert)
+  // 0 rad (rechts) = Cyan, oben = Magenta
+  const SWEEP_START = -Math.PI / 2; // rotieren, so dass "oben" = 0.5 Position (Magenta)
+  const SWEEP_END   = SWEEP_START + Math.PI * 2;
 
-// Edge ripple low-pass filter parameter
-const EDGE_EMA_ALPHA = 0.04; // Further reduced for even smoother main circle
-
-// Global gain fine-tuning for core spots
-const CORE_SPOT_GAIN = 1.35; // +35% mehr Helligkeit für Spots
-
-// Wandering spots constants for simplified motion
-const SPOT_SX = 1.02;
-const SPOT_SY = 0.98;
-const SPOT_PHASE_NOISE_FREQ = 0.05; // Hz (very slow)
-
-// Stable blob IDs for consistent state management
-const blobIds = BLOB_CONFIGS.map((_, i) => i);
-
-// Helper function to get blob color
-const getBlobColor = (colorKey: string): string => {
-  return SIRI_COLORS[colorKey as keyof typeof SIRI_COLORS] || SIRI_COLORS.siriBlue;
-};
-
-// Subtle dithering function for alpha values
-const dither = (seed: number, t: number) => {
-  const k = Math.sin(seed * 12.9898 + Math.floor(t * 10) * 78.233) * 43758.5453;
-  return (k - Math.floor(k)) * 0.02 - 0.01; // ±1%
-};
-
-// Gradient position jitter for organic variation
-const jitter = (seed: number, base: number, t: number, amt = 0.002) => {
-  const k = Math.sin(seed * 91.7 + t * 37.1);
-  return Math.max(0, Math.min(1, base + k * amt));
-};
-
-// 3D Rotation Matrix functions
-const createRotationMatrix = (theta: number, phi: number): number[][] => {
-  const cosTheta = Math.cos(theta);
-  const sinTheta = Math.sin(theta);
-  const cosPhi = Math.cos(phi);
-  const sinPhi = Math.sin(phi);
-
-  return [
-    [cosTheta * cosPhi, -sinTheta, cosTheta * sinPhi],
-    [sinTheta * cosPhi, cosTheta, sinTheta * sinPhi],
-    [-sinPhi, 0, cosPhi]
+  const SIRI_SWEEP_COLORS = [
+    'rgba(0,199,255,0.85)',   // Cyan
+    'rgba(58,168,255,0.85)',  // Blau
+    'rgba(122,77,255,0.85)',  // Violett
+    'rgba(255,44,195,0.85)',  // Magenta
+    'rgba(255,138,76,0.85)',  // Warm
+    'rgba(0,199,255,0.85)'    // zurück zu Cyan
   ];
-};
+  const SIRI_SWEEP_POS = [0.00, 0.22, 0.46, 0.70, 0.92, 1.00];
 
-const rotate3DPoint = (point: Point3D, matrix: number[][]): Point3D => {
-  return {
-    x: point.x * matrix[0][0] + point.y * matrix[0][1] + point.z * matrix[0][2],
-    y: point.x * matrix[1][0] + point.y * matrix[1][1] + point.z * matrix[1][2],
-    z: point.x * matrix[2][0] + point.y * matrix[2][1] + point.z * matrix[2][2]
+  const LOBE = {
+    right: 'rgba(56,225,255,0.85)',  // Cyan
+    top:   'rgba(255,79,216,0.85)',  // Magenta
+    left:  'rgba(122,77,255,0.85)',  // Violett/Blau
   };
-};
 
-// Ultra-simple rotation without complex precession
-const precessAngles = (base: {theta:number; phi:number}, t:number, seed:number) => {
-  const slow = t * 0.03; // Very slow precession
-  return {
-    theta: base.theta + 0.05 * Math.sin(slow * 0.15 + seed * 2.0), // Minimal precession
-    phi: base.phi + 0.04 * Math.cos(slow * 0.12 + seed * 1.8) // Minimal precession
-  };
-};
+  // SIRI META-PETALS v4 (SkSL) - sRGB→Linear, härtere Trennung, helleres Core
+  const META_PETAL_SRC = `
+uniform float2 u_res;
+uniform float2 u_center;
 
-// Tangente/Normale Schätzung per Winkel
-const computeNormal2D = (angle: number): {nx: number; ny: number} => {
-  // Kreisbasisnormalen (nach außen)
-  const nx = Math.cos(angle);
-  const ny = Math.sin(angle);
-  return { nx, ny };
-};
+uniform float aTop;   uniform float LTop;   uniform float w0Top;   uniform float w1Top;   uniform float pinchTop;   uniform float bendTop;
+uniform float aRight; uniform float LRight; uniform float w0Right; uniform float w1Right; uniform float pinchRight; uniform float bendRight;
+uniform float aLeft;  uniform float LLeft;  uniform float w0Left;  uniform float w1Left;  uniform float pinchLeft;  uniform float bendLeft;
 
-// Fresnel-ähnliche Highlight-Intensität basierend auf Lichtvektor
-// lightDir sollte normalisiert sein
-const highlightIntensity = (nx: number, ny: number, lightDir: {x:number;y:number}, gloss: number) => {
-  const dp = Math.max(0, nx * lightDir.x + ny * lightDir.y);
-  // Gloss steuert Schärfe des Highlights - schärfer für realistischere Reflexionen
-  const i = Math.pow(dp, gloss);
-  // Zusätzliche Fresnel-Komponente für glasigen Look
-  const fresnel = Math.pow(1 - dp, 2);
-  return i * (0.7 + 0.3 * fresnel);
-};
+uniform float3 colTop;
+uniform float3 colRight;
+uniform float3 colLeft;
 
-// Einfache Occlusion aufgrund von Z (hinten weniger Licht/Opacity)
-const occlusionFromZ = (z: number, sphereRadius: number) => {
-  // z in [-sphereRadius, +sphereRadius]
-  const depth = (z + sphereRadius) / (2 * sphereRadius); // 0..1
-  // Vorne ~1.0, hinten ~0.15 - stärkere Occlusion für bessere Tiefe
-  const occlusion = 0.15 + 0.85 * Math.pow(depth, 1.2);
-  return occlusion;
-};
+uniform float u_thresh;
+uniform float u_soft;
 
-const nearestNeighborDist = (i:number, positions: BlobPosition[]) => {
-  let best = Infinity;
-  const p = positions[i];
-  for (let j=0;j<positions.length;j++){
-    if (j===i) continue;
-    const q = positions[j];
-    const dx = q.x - p.x, dy = q.y - p.y;
-    const d = Math.hypot(dx, dy);
-    if (d < best) best = d;
-  }
-  return best;
-};
+uniform float coreR1;
+uniform float coreR2;
+uniform float coreStrength;
 
-/**
- * Creates a Siri blob path with organic deformations
- */
-const createSiriBlobPath = (
-  centerX: number,
-  centerY: number,
-  baseRadius: number,
-  time: number,
-  amplitudeFactor: number,
-  config: BlobConfig,
-  perlinFn: (x: number, y: number, z: number) => number,
-  isMain: boolean = false,
-  totalDefEmaMapRef?: React.MutableRefObject<{ [key: string]: number }>,
-  rotLocal: number = 0,
-  shapeRefs?: React.MutableRefObject<{ [key: number]: { sx: number; sy: number; sh: number } }>
-): import('@shopify/react-native-skia').SkPath => {
-  const points: { x: number; y: number; }[] = [];
-  const numPoints = 96;
-  let totalDefEma = 0;
+uniform float2 offTop, offRight, offLeft;
+uniform float sxTop, syTop, shTop;
+uniform float sxRight, syRight, shRight;
+uniform float sxLeft, syLeft, shLeft;
+uniform float bTop, bRight, bLeft;
 
-  for (let i = 0; i <= numPoints; i++) {
-    const angle = (i / numPoints) * Math.PI * 2;
+// NEU: Feder-Taper & Dominanz
+uniform float tipStart;   // z.B. 0.70
+uniform float tipEnd;     // z.B. 0.985
+uniform float tipPow;     // z.B. 1.45
+uniform float domPow;     // z.B. 1.25
+
+const float PI = 3.14159265;
+
+struct Lobe { float a; float L; float w0; float w1; float pinch; float bend; float3 col; };
+
+float clamp01(float x){ return clamp(x, 0.0, 1.0); }
+float toLin(float c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
+float3 srgb2lin(float3 c) { return float3(toLin(c.r), toLin(c.g), toLin(c.b)); }
+float toSRGB(float c) { return c <= 0.0031308 ? 12.92 * c : 1.055 * pow(max(c,0.0), 1.0/2.4) - 0.055; }
+float3 lin2srgb(float3 c) { return float3(toSRGB(c.r), toSRGB(c.g), toSRGB(c.b)); }
+
+// Basisfeld eines Lappens (mit Anisotropie/Shear); gibt Feldstärke zurück
+float petalFieldL(float2 p, float2 c, Lobe lb, float2 off, float sx, float sy, float sh) {
+  float ca = cos(lb.a), sa = sin(lb.a);
+  float2 ux = float2(ca, sa);
+  float2 vy = float2(-sa, ca);
+  float2 d0 = p - (c + off);
+  float u0 = dot(d0, ux);
+  float v0 = dot(d0, vy);
+  float u = clamp(u0, 0.0, lb.L);
+  float s = (lb.L > 1e-3) ? (u / lb.L) : 0.0;
+
+  float belly = 0.5 - 0.5 * cos(PI * s);
+  float w = mix(lb.w0, lb.w1, smoothstep(0.06, 0.72, s)) * (0.62 + 0.38 * belly);
+  w *= mix(1.0, 0.78, clamp01(lb.pinch));
+
+  float curve = lb.bend * lb.L * 0.16 * (s - 0.35) * (1.0 - s);
+  float v = v0 - curve;
+
+  float uA = sx * u + sh * v;
+  float vA = sy * v;
+
+  float q = vA / (w + 1e-3);
+  float tipFade = max(0.0, (abs(uA) - lb.L) / (0.25 * lb.L + 1.0));
+
+  return exp(-q*q) * exp(-tipFade*tipFade);
+}
+
+// Anteil der Achsenlänge 0..1 (für Feder-Taper). Nutzt u0 ohne Aniso.
+float axisFrac(float2 p, float2 c, Lobe lb, float2 off) {
+  float2 d0 = p - (c + off);
+  float ca = cos(lb.a), sa = sin(lb.a);
+  float2 ux = float2(ca, sa);
+  float u0 = dot(d0, ux);
+  float u = clamp(u0, 0.0, lb.L);
+  return (lb.L > 1e-3) ? (u / lb.L) : 0.0;
+}
+
+// schärferes weiches Maximum
+float softmax3(float a, float b, float c, float k) {
+  float ea = exp(k * a), eb = exp(k * b), ec = exp(k * c);
+  return log(ea + eb + ec) / k;
+}
+
+half4 main(float2 frag) {
+  float2 p = frag, c = u_center;
+
+  Lobe t; t.a=aTop; t.L=LTop; t.w0=w0Top; t.w1=w1Top; t.pinch=pinchTop; t.bend=bendTop; t.col=colTop;
+  Lobe r; r.a=aRight; r.L=LRight; r.w0=w0Right; r.w1=w1Right; r.pinch=pinchRight; r.bend=bendRight; r.col=colRight;
+  Lobe l; l.a=aLeft; l.L=LLeft; l.w0=w0Left; l.w1=w1Left; l.pinch=pinchLeft; l.bend=bendLeft; l.col=colLeft;
+
+  float Ft = petalFieldL(p, c, t, offTop,   sxTop,   syTop,   shTop);
+  float Fr = petalFieldL(p, c, r, offRight, sxRight, syRight, shRight);
+  float Fl = petalFieldL(p, c, l, offLeft,  sxLeft,  syLeft,  shLeft);
+
+  float k = 1.45;            // schärferes softmax → klarere Überlagerungen
+  float F = softmax3(Ft, Fr, Fl, k);
+  float alpha = smoothstep(u_thresh - u_soft, u_thresh + u_soft, F);
+
+  // Feder-Taper: entlang der Lappenachse zur Spitze ausfaden
+  float st = axisFrac(p, c, t, offTop);
+  float sr = axisFrac(p, c, r, offRight);
+  float sl = axisFrac(p, c, l, offLeft);
+
+  float taperT = 1.0 - smoothstep(tipStart, tipEnd, st);
+  float taperR = 1.0 - smoothstep(tipStart, tipEnd, sr);
+  float taperL = 1.0 - smoothstep(tipStart, tipEnd, sl);
+
+  taperT = pow(clamp01(taperT), tipPow);
+  taperR = pow(clamp01(taperR), tipPow);
+  taperL = pow(clamp01(taperL), tipPow);
+
+  // Dominanz-Gate: dort heller, wo der Lappen gewinnt; reduziert matschige Mitte
+  float domScale = 1.0 / max(u_soft * 1.45, 1e-4);
+  float dT = clamp((Ft - max(Fr, Fl)) * domScale, 0.0, 1.0);
+  float dR = clamp((Fr - max(Ft, Fl)) * domScale, 0.0, 1.0);
+  float dL = clamp((Fl - max(Ft, Fr)) * domScale, 0.0, 1.0);
+
+  dT = pow(dT, domPow);
+  dR = pow(dR, domPow);
+  dL = pow(dL, domPow);
+
+  // Per‑Lappen-Alphas (Kante) + Feder-Taper + Dominanz; premultiplied (für plus)
+  float aT = smoothstep(u_thresh - u_soft, u_thresh + u_soft, Ft) * taperT * mix(0.28, 1.0, dT);
+  float aR = smoothstep(u_thresh - u_soft, u_thresh + u_soft, Fr) * taperR * mix(0.28, 1.0, dR);
+  float aL = smoothstep(u_thresh - u_soft, u_thresh + u_soft, Fl) * taperL * mix(0.28, 1.0, dL);
+
+  float3 colTopL   = srgb2lin(t.col) * bTop;
+  float3 colRightL = srgb2lin(r.col) * bRight;
+  float3 colLeftL  = srgb2lin(l.col) * bLeft;
+
+  float3 insideL = colTopL * aT + colRightL * aR + colLeftL * aL;
+
+  // Core-Glint (zentral, hell)
+  float2 pc = p - c;
+  float d2 = dot(pc, pc);
+  float core = coreStrength * 1.35 * (exp(-d2/(coreR1*coreR1)) + 0.55 * exp(-d2/(coreR2*coreR2)));
+  insideL += core * 1.10;
+
+  // Dünne iso‑Rim direkt an der Formkante
+  float isoA = u_thresh + u_soft * 0.20;
+  float isoB = u_thresh + u_soft * 0.95;
+  float isoC = u_thresh + u_soft * 1.75;
+  float rimBand = clamp((smoothstep(isoA, isoB, F) - smoothstep(isoB, isoC, F)), 0.0, 1.0);
+
+  // Kantenableitung für feine Betonung
+  float2 px = float2(1.25, 0.0), py = float2(0.0, 1.25);
+  float Fx = softmax3(
+    petalFieldL(p + px, c, t, offTop, sxTop, syTop, shTop),
+    petalFieldL(p + px, c, r, offRight, sxRight, syRight, shRight),
+    petalFieldL(p + px, c, l, offLeft, sxLeft, syLeft, shLeft), k
+  ) - softmax3(
+    petalFieldL(p - px, c, t, offTop, sxTop, syTop, shTop),
+    petalFieldL(p - px, c, r, offRight, sxRight, syRight, shRight),
+    petalFieldL(p - px, c, l, offLeft, sxLeft, syLeft, shLeft), k
+  );
+  float Fy = softmax3(
+    petalFieldL(p + py, c, t, offTop, sxTop, syTop, shTop),
+    petalFieldL(p + py, c, r, offRight, sxRight, syRight, shRight),
+    petalFieldL(p + py, c, l, offLeft, sxLeft, syLeft, shLeft), k
+  ) - softmax3(
+    petalFieldL(p - py, c, t, offTop, sxTop, syTop, shTop),
+    petalFieldL(p - py, c, r, offRight, sxRight, syRight, shRight),
+    petalFieldL(p - py, c, l, offLeft, sxLeft, syLeft, shLeft), k
+  );
+  float edge = pow(clamp(length(float2(Fx, Fy)) * 0.70, 0.0, 1.0), 0.85) * smoothstep(0.15, 0.85, alpha);
+
+  // Fresnel peakt an der Kante (nicht außerhalb)
+  float fres = 0.60 * alpha * (1.0 - alpha);
+
+  insideL += (edge * 0.06 + rimBand * 0.20) + fres * 0.85; // weniger Banding, etwas mehr Edge
+
+  // Mildes Tonemapping -> Highlights bleiben hell
+  insideL = insideL / (1.0 + 0.55 * insideL);
+
+  float3 col = lin2srgb(max(insideL, float3(0.0)));
+  return half4(col, alpha);
+}
+`;
   
-    if (isMain) {
-      const phaseOffset1 = config.seed * Math.PI * 2;
-      const phaseOffset2 = (config.seed + 0.3) * Math.PI * 2;
-      const phaseOffset3 = (config.seed + 0.7) * Math.PI * 2;
-    
-      const GLOBAL_PHASE = 2 * Math.PI * 0.03 * time;
-    
-      const wave1 = Math.sin(angle * 1.2 + phaseOffset1 + time * 0.4 + GLOBAL_PHASE) * (baseRadius * 0.0052);
-      const wave2 = Math.sin(angle * 1.8 + phaseOffset2 + time * 0.55 + GLOBAL_PHASE) * (baseRadius * 0.0023);
-      const wave3 = Math.sin(angle * 2.3 + phaseOffset3 + time * 0.75 + GLOBAL_PHASE) * (baseRadius * 0.0015);
-    
-      const totalDeformation = wave1 + wave2 + wave3;
-    
-      let finalRadius: number;
-      if (totalDefEmaMapRef) {
-        const emaKey = 'main';
-        const prev = totalDefEmaMapRef.current[emaKey] ?? totalDeformation;
-        const newTotalDefEma = prev + EDGE_EMA_ALPHA * (totalDeformation - prev);
-        totalDefEmaMapRef.current[emaKey] = newTotalDefEma;
-        finalRadius = baseRadius + newTotalDefEma;
-      } else {
-        totalDefEma = totalDefEma + (totalDeformation - totalDefEma) * EDGE_EMA_ALPHA;
-        finalRadius = baseRadius + totalDefEma;
-      }
-    
-      const x = centerX + Math.cos(angle) * finalRadius;
-      const y = centerY + Math.sin(angle) * finalRadius;
-      points.push({ x, y });
-    } else {
-      const breathe = 1 + ((Math.sin(time * config.breathingFreq) + 1) * 0.5) * (config.breathingAmp * 0.35);
-      const shapedRadius = baseRadius * (breathe + amplitudeFactor * 0.01);
-    
-      return makeBlobPath2D(centerX, centerY, shapedRadius, time, config.seed, rotLocal, shapeRefs, config.seed);
+  // Utils
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const deg = (d: number) => (d * Math.PI) / 180;
+
+  // Noise helpers for endless, non-looping animations
+  const fract = (x: number) => x - Math.floor(x);
+  const hash1 = (x: number) => fract(Math.sin(x * 127.1 + 311.7) * 43758.5453123);
+  const noise1D = (x: number, seed = 0) => {
+    const i = Math.floor(x + seed * 17.123);
+    const f = x - Math.floor(x);
+    const u = f * f * (3 - 2 * f);
+    const a = hash1(i);
+    const b = hash1(i + 1);
+    return (a * (1 - u) + b * u) * 2 - 1;
+  };
+  const fbm1D = (x: number, seed = 0, oct = 4) => {
+    let v = 0, amp = 0.5, freq = 1.0;
+    for (let o = 0; o < oct; o++) { v += amp * noise1D(x * freq, seed + o * 19.19); freq *= 2.02; amp *= 0.5; }
+    return v;
+  };
+
+  const smoothstep = (a: number, b: number, x: number) => {
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+
+  // Catmull-Rom -> Cubic helper for smooth outlines
+  type V2 = { x: number; y: number };
+  const cubicThrough = (p: any, pts: V2[]) => {
+    if (pts.length < 2) return;
+    p.moveTo(pts[0].x, pts[0].y);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = i === 0 ? pts[i] : pts[i - 1];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+      p.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
     }
-  }
-
-  const path = createClosedCatmullRomPath(points, 0.2, Skia as any);
-  return path;
-};
-
-/**
- * Helper function for 2D blob path generation
- */
-// Glatter, lappenfreier Blob: nur niederfrequente Noise, sanfte Konturen
-function makeBlobPath2D(
-  cx: number, cy: number, baseR: number, t: number,
-  seed = 0, rotLocal = 0,
-  shapeRefs?: React.MutableRefObject<{ [key: number]: { sx: number; sy: number; sh: number } }>,
-  blobId?: number
-) {
-  const n = 128;
-
-  // Sichtbare Siri-Deformation - organischer
-  const amp1 = 0.035 * baseR;   // 3.5% Radius (sichtbarer)
-  const amp2 = 0.008 * baseR;   // 0.8% Radius (sichtbarer)
-  const f1 = 0.65;              // niedrige „Atmungs"-Welle
-  const f2 = 1.25;              // 2. Harm. sichtbar
-  const speed = 0.012;          // langsam aber sichtbar
-
-  const phase = 2 * Math.PI * speed * t + seed * 0.9;
-
-  const pts: {x:number;y:number}[] = [];
-  for (let i = 0; i < n; i++) {
-    const ang = (i / n) * 2 * Math.PI;
-    const rDelta =
-      amp1 * Math.sin(f1 * ang + phase) +
-      amp2 * Math.sin(f2 * ang - phase * 0.4);
-
-    const r = baseR + rDelta;
-    pts.push({ x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) });
-  }
-
-  // quasi-konstante Ellipse/Shear (praktisch aus)
-  const rawSx = 1.0002, rawSy = 0.9998, rawSh = 0.0;
-  let sx = rawSx, sy = rawSy, sh = rawSh;
-  if (shapeRefs && blobId !== undefined) {
-    const prev = shapeRefs.current[blobId] || { sx: rawSx, sy: rawSy, sh: rawSh };
-    const dt = 0.016, tau = 2.0;
-    sx = expSlewSimple(prev.sx, rawSx, tau, dt);
-    sy = expSlewSimple(prev.sy, rawSy, tau, dt);
-    sh = expSlewSimple(prev.sh, rawSh, tau, dt);
-    shapeRefs.current[blobId] = { sx, sy, sh };
-  }
-
-  const warped = pts.map(p => applyAnisoShear(cx, cy, p, sx, sy, sh, rotLocal));
-  return createClosedCatmullRomPath(warped, 0.28, Skia as any); // noch stärker glätten
-}
-
-// Anisotrope Skalierung + Shear im lokalen Blob-Frame
-const applyAnisoShear = (cx:number, cy:number, p:{x:number;y:number}, sx:number, sy:number, sh:number, rot:number) => {
-  // translate to local
-  const x = p.x - cx, y = p.y - cy;
-  // rotation
-  const ca = Math.cos(rot), sa = Math.sin(rot);
-  let xr =  ca * x + sa * y;
-  let yr = -sa * x + ca * y;
-  // shear (x += sh * y)
-  xr = xr + sh * yr;
-  // scale
-  xr *= sx;
-  yr *= sy;
-  // rotate back
-  const xo =  ca * xr - sa * yr;
-  const yo =  sa * xr + ca * yr;
-  return { x: cx + xo, y: cy + yo };
-};
-
-// Radiales Feld (soft fill) im lokalen Blob-Frame
-// Hier: F(d) = clamp(1 - (d/R)^2, 0, 1)
-function radialField(px:number, py:number, cx:number, cy:number, R:number) {
-  const dx = px - cx, dy = py - cy;
-  const q = (dx*dx + dy*dy) / (R*R);
-  return Math.max(0, 1 - q);
-}
-
-// Screen-space Approximation der Normale über Feldgradient (finite difference)
-function fieldNormal(px:number, py:number, cx:number, cy:number, R:number, eps:number=1.0) {
-  const fL = radialField(px - eps, py, cx, cy, R);
-  const fR = radialField(px + eps, py, cx, cy, R);
-  const fT = radialField(px, py - eps, cx, cy, R);
-  const fB = radialField(px, py + eps, cx, cy, R);
-  let nx = (fR - fL);
-  let ny = (fB - fT);
-  const len = Math.hypot(nx, ny) || 1;
-  nx /= len; ny /= len;
-  return { nx, ny };
-}
-
-// Schmale Bandmaske am Rand (Rim) – positioniert relativ zum Radius
-// returns mask 0..1, peak bei r ≈ bandCenter (in [0..1] relativ zum R)
-function rimBand(px:number, py:number, cx:number, cy:number, R:number, bandCenter:number, bandWidth:number) {
-  const d = Math.hypot(px - cx, py - cy) / (R + 1e-6); // normierte Distanz
-  const a = Math.abs(d - bandCenter) / (bandWidth + 1e-6);
-  // weiche Gauß-/Exp-Falloff
-  return Math.exp(-a*a*2.5);
-}
-
-// Versatz für Rim-Zentrum entlang der Lichtseite (tangential zum Blob)
-function rimOffsetFor(blobX:number, blobY:number, R:number, light:{x:number;y:number}, gain:number=0.10) {
-  // Tangentenrichtung: rotiere den Lichtvektor um +90°
-  const tx = -light.y, ty = light.x;
-  // leicht nach außen versetzen (R * gain) und etwas entlang T schieben (R * 0.16)
-  const dx = (-light.x) * R * gain + tx * R * 0.16;
-  const dy = (-light.y) * R * gain + ty * R * 0.16;
-  return { dx, dy };
-}
-
-// RGB to HSL conversion
-const rgbToHsl = (r: number, g: number, b: number) => {
-  r /= 255; g /= 255; b /= 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h = 0, s = 0, l = (max + min) / 2;
-
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-      case g: h = (b - r) / d + 2; break;
-      case b: h = (r - g) / d + 4; break;
-    }
-    h /= 6;
-  }
-
-  return { h: h * 360, s: s * 100, l: l * 100 };
-};
-
-// HSL to RGB conversion
-const hslToRgb = (h: number, s: number, l: number) => {
-  h /= 360; s /= 100; l /= 100;
-  const hue2rgb = (p: number, q: number, t: number) => {
-    if (t < 0) t += 1;
-    if (t > 1) t -= 1;
-    if (t < 1/6) return p + (q - p) * 6 * t;
-    if (t < 1/2) return q;
-    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
-    return p;
   };
 
-  let r, g, b;
-  if (s === 0) {
-    r = g = b = l;
-  } else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1/3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1/3);
-  }
-
-  return {
-    r: Math.round(r * 255),
-    g: Math.round(g * 255),
-    b: Math.round(b * 255)
-  };
-};
-
-// Update blob colors dynamically for harmonious animation
-const updateBlobColorSmooth = (prevHSL: {h: number, s: number, l: number}, targetHSL: {h: number, s: number, l: number}, dt: number) => {
-  const HUE_RATE_DEG_PER_S = 6;
-  const SAT_RATE_PER_S = 0.18;
-  const LIG_RATE_PER_S = 0.12;
-
-  const hueDiff = targetHSL.h - prevHSL.h;
-  const satDiff = targetHSL.s - prevHSL.s;
-  const lightDiff = targetHSL.l - prevHSL.l;
-
-  const limitedHueDiff = Math.max(-HUE_RATE_DEG_PER_S * dt, Math.min(HUE_RATE_DEG_PER_S * dt, hueDiff));
-  const limitedSatDiff = Math.max(-SAT_RATE_PER_S * dt, Math.min(SAT_RATE_PER_S * dt, satDiff));
-  const limitedLightDiff = Math.max(-LIG_RATE_PER_S * dt, Math.min(LIG_RATE_PER_S * dt, lightDiff));
-
-  const newH = (prevHSL.h + limitedHueDiff + 360) % 360;
-  const newS = Math.max(0, Math.min(100, prevHSL.s + limitedSatDiff));
-  const newL = Math.max(0, Math.min(100, prevHSL.l + limitedLightDiff));
-
-  return { h: newH, s: newS, l: newL };
-};
-
-// Helper function for dt-robust exponential smoothing
-const expSlewSimple = (current: number, target: number, tau: number, dt: number) => {
-  const a = 1 - Math.exp(-dt / tau);
-  return current + a * (target - current);
-};
-
-// Helper functions for core effects
-const mix = (a: number, b: number, t: number) => a + (b - a) * t;
-const smooth01 = (x: number) => {
-  const k = clamp(x, 0, 1);
-  return k * k * (3 - 2 * k);
-};
-const toHexA = (a: number) =>
-  Math.max(0, Math.min(255, (a * 255) | 0))
-    .toString(16)
-    .padStart(2, '0');
-
-const BASELINE_22 = true;
-const BASELINE_24 = true; // Edge Color Whisper aktivieren/deaktivieren
-
-// Specular Sparkle tuning
-const SPEC = {
-  minOp: 0.02,        // Grundglanz, fast unsichtbar
-  maxOp: 0.22,        // Peak‑Highlight (dezent: 0.18–0.22)
-  sizeR: 0.075,       // Radius des Hotspot-Kerns relativ R (dezent: 0.075)
-  falloff: 0.72,      // 0.7–0.9: kleiner = härter (mehr "nass": 0.7)
-  bloomMul: 1.20,     // Zusatz-Bloom für "nasse" Glasoptik (dezent: 1.2, mehr "nass": 1.5)
-  decay: 7.0,         // s^-1 (Exponentieller Abfall) (gegen Flackern: 7–8)
-  attack: 14.0,       // s^-1 (Schnelles Einschwingen) (gegen Flackern: 12–14)
-  tilt: 16 * Math.PI/180, // leichter Licht-Tilt
-  hueShift: 0.025,    // 0–0.07: wärmt die Specular etwas (gegen zu "weiß": 0.02–0.03)
-};
-
-// Refraction/Edge effects tuning
-const REFR = {
-  width: 0.034,       // Randbreite relativ R (Range: 0.020–0.040) - Abstand der zwei chromatischen Säume zur Kreis‑Edge
-  shift: 0.008,       // spektrale Verschiebung (Range: 0.004–0.010) - Spektrale Radial‑Verschiebung pro Rim
-  op: 0.10,           // Grundopacity (Range: 0.08–0.14) - Master‑Helligkeit beider Rims
-  opAmp: 0.24,        // Amplituden‑Zuschlag (Range: 0.10–0.28) - Reaktivität auf Amplitude
-  breathShift: 0.40,  // Breath‑Modulation (Range: 0.20–0.50) - Radial‑Verschiebung mit Breath‑Phase
-  speed: 0.48,        // azimutale Drift (Range: 0.18–0.55) - SweepGradient start/end Geschwindigkeit
-  hueCool: '#8FC3FF', // kühles Blau (Vorschläge: '#8FC3FF' kühler, '#A6CEFF' neutraler)
-  hueWarm: '#FFC893', // warmes Amber (Vorschläge: '#FFC893' rötlicher, '#FFE1B8' neutraler)
-};
-
-// Caustic/Edge refinement tuning
-const CAU = {
-  arcDeg: 56, // Increased from 28
-  coolOp: 0.26, // Reduced from 0.28
-  warmOp: 0.25, // Reduced from 0.26
-  coolHue: '#8FC3FF',
-  warmHue: '#FFC893',
-  radialTightCool: [0.74, 0.90, 0.988],
-  radialTightWarm: [0.60, 0.84, 0.988],
-  sweepTightC: [0.10, 0.18, 0.28],
-  sweepTightW: [0.62, 0.70, 0.80],
-  bloom: 0.16, // Increased from 0.14
-};
-
-const CAU_SPEED = 0.62; // arc sweep speed (rad/s)
-
-// Rim Clamp (Sicherheitsdeckel gegen Übersättigung)
-const RIM_CLAMP = { 
-  opMax: 0.30, 
-  arcCoolMax: 0.28, 
-  arcWarmMax: 0.24 
-};
-
-// Core effects tuning
-const CORE = {
-  rInner: 0.055, // innerster Kern (relativ R)
-  rOuter: 0.36, // bis hierhin Caustic-Falloff
-  cool: '#9BC2FF', // kühler Tint
-  warm: '#FFE0C2', // warmer Tint
-  opMax: 0.20, // 0.18–0.22; stays under clamps
-  pulseAmt: 0.08, // 0–0.1
-  grain: 0.12, // mikroskopische Variation
-};
-
-// Ripple effects tuning
-const RIP = {
-  kCount: 3, // Anzahl überlagerter Ripples
-  freq: [1.0, 1.35, 1.9], // relative Frequenzen
-  amp: 0.065, // Gesamtauslenkung (0.05–0.07)
-  falloff: 1.8, // radialer Abfall
-  op: 0.20, // Gesamtopacity (0.14–0.22)
-  swirl: 0.45, // leichter Winkel‑Drift
-  speed: 0.6, // Rotationsgeschwindigkeit
-  hueCool: '#94B7E9',
-  hueWarm: '#FFDDBF',
-};
-
-// Speckle effects tuning
-const SPECK = {
-  count: 22, // 20–26
-  rMin: 0.38, // relativ R
-  rMax: 0.86,
-  size: [0.006, 0.018],
-  opMin: 0.04,
-  opMax: 0.16, // +0.02 from base for clarity
-  drift: 0.45, // radiales Wandern
-  swirl: 0.9, // Winkel‑Drift
-  speed: 0.8, // Basisgeschwindigkeit
-};
-
-// Bloom effects tuning
-const BLOOM = {
-  edgeOp: 0.20, // 0.18–0.24
-  edgeR: 1.20, // softer outer rolloff
-  vignette: 0.12, // 0.10–0.14
-  tilt: 0.06, // leichtes Downlight
-};
-
-// Motion effects tuning
-const MOT = {
-  arcEase: 0.55, // 0.4–0.7 non-linear orbit
-};
-
-// Twinkle effects tuning
-const TWK = {
-  rate: 0.12, // events per second per speck
-  boost: 1.8, // Verstärkung
-  decay: 7.0, // Abklingen
-};
-
-// Sparkle effects tuning
-const SPARC = {
-  count: 4, // 2–4 Funken
-  baseR: 0.96, // Nähe zur Edge (relativ R)
-  sizeR: 0.060, // Kernradius (relativ R)
-  opMin: 0.04,
-  opMax: 0.22,
-  attack: 18.0, // Einschwingen
-  release: 8.0, // Abklingen
-  hue: '#FFFFFF', // Screen-weiß
-};
-
-// Static arrays for performance (no need for useMemo since they're constant)
-const RIP_SWEEP_POS = Array.from({ length: 361 }, (_, i) => i / 360);
-
-export default function SiriSkia({
-  amplitude,
-  isRunning = true,
-  isDarkMode = true
-}: SiriSkiaProps) {
-  // Get screen dimensions
-  const { width, height } = Dimensions.get('window');
-  const centerX = React.useMemo(() => width / 2, [width]);
-  const centerY = React.useMemo(() => height / 2, [height]);
-  
-  
-  // Debug toggles for evaluation
-  const DEBUG = { showZLayers: false, freezeForces: false, showNormals: false };
-  // Animation state using refs for performance
-  const tRef = React.useRef(0);
-  const rotRef = React.useRef(0);
-  const ampRef = React.useRef(0);
-  const [tick, setTick] = useState(0);
-  const animationRef = React.useRef<number | null>(null);
-  const lastTimeRef = React.useRef<number>((globalThis.performance?.now?.() ?? Date.now()) / 1000);
-  const dtEmaRef = React.useRef(1/60);
-  const mainRadiusRef = React.useRef(70);
-  const totalDefEmaMapRef = React.useRef<{ [key: string]: number }>({});
-  const blobColorsRef = React.useRef<Record<number, {r: number, g: number, b: number, h: number, s: number, l: number}>>({});
-  const colorEMARef = React.useRef<Record<number, {r: number, g: number, b: number}>>({});
-  const perspRef = React.useRef<Record<number, number>>({});
-  const xEmaRef = React.useRef<Record<number, number>>({});
-  const yEmaRef = React.useRef<Record<number, number>>({});
-  const zEmaRef = React.useRef<Record<number, number>>({});
-  const perlinMapRef = React.useRef<Record<number, (x: number, y: number, z: number) => number>>({});
-
-  // Schritt 2.3: Breathing-Phase (6–8s), geteilt für Glow & Specular
-  const breathPhaseRef = React.useRef(0);
-  const breathEnvRef = React.useRef(0); // 0..1 eased amplitude
-  
-  // Speichert schnelle Peak-Envelope
-  const specEnvRef = React.useRef(0);
-  const sparkEnvRef = React.useRef(0);
-  
-  // Crossfade-Envelope
-  const coreEnvRef = React.useRef(0); // warm<->cool crossfade 0..1
-  const corePulseRef = React.useRef(0); // sanftes Atmen
-  
-  // REFR phase for azimuthal movement
-  const phaseRef = React.useRef(0);
-  const rimShiftRef = React.useRef(0);
-  const rimOpRef = React.useRef(0);
-  const ripplePhaseRef = React.useRef(0);
-  const speckSeedRef = React.useRef(1.234);
-  const twinkleBufRef = React.useRef<number[]>([]);
-
-  // Create perlin noise function for organic movement
-  const perlinFn = React.useMemo(() => makePerlin(42), []);
-  const mainNoise = React.useMemo(() => makePerlin(0.1), []);
-
-  // Rotation helper function
-  const rot = (x: number, y: number, a: number, cx: number, cy: number) => {
-    const dx = x - cx, dy = y - cy;
-    const ca = Math.cos(a), sa = Math.sin(a);
-    return vec(cx + dx*ca - dy*sa, cy + dx*sa + dy*ca);
-  };
-
-  // Initialize rotation offset for Cyan at top-left
-  useEffect(() => { 
-    rotRef.current = -Math.PI * 0.25; 
-    // Initialize twinkle buffer
-    twinkleBufRef.current = new Array(SPECK.count).fill(0);
-  }, []);
-
-  // Animation loop
-  useEffect(() => {
-    if (!isRunning) {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-        animationRef.current = null;
-      }
-      return;
-    }
-
-    const animate = (ts?: number) => {
-      // High-resolution timestamp from rAF
-      const nowSec = (ts ?? (globalThis.performance?.now?.() ?? Date.now())) / 1000;
-      const lastSec = lastTimeRef.current;
-      const rawDt = Math.max(0, Math.min(0.1, nowSec - lastSec)); // cap at 100ms
-      lastTimeRef.current = nowSec;
-      // One unified dt for the whole frame
-      dtEmaRef.current = dtEmaRef.current + (rawDt - dtEmaRef.current) * 0.3;
-      const dtUsed = dtEmaRef.current;
-      tRef.current += dtUsed;
-
-      // 2.3: Breathing (7.2s Zyklus) – weiches Ease-In-Out
-      const breathSpeed = (2 * Math.PI) / 7.2;
-      breathPhaseRef.current = (breathPhaseRef.current + dtUsed * breathSpeed) % (2 * Math.PI);
-      const rawBreath = 0.5 - 0.5 * Math.cos(breathPhaseRef.current); // 0..1, ease-in-out
-      // leichte zusätzliche Glättung
-      breathEnvRef.current = expSlewSimple(breathEnvRef.current, rawBreath, 0.36, dtUsed);
-
-      // Speichert schnelle Peak-Envelope
-      const amp = Math.min(1, amplitude / 100); // 0..1
-      const specDt = Math.max(1e-3, dtUsed);
-      
-      // Attack/Release
-      const target = Math.min(1, amp * 1.15); // leicht "overdrive"
-      const env = specEnvRef.current;
-      const kUp = 1 - Math.exp(-SPEC.attack * specDt);
-      const kDn = 1 - Math.exp(-SPEC.decay * specDt);
-      specEnvRef.current = target > env ? env + (target - env) * kUp
-                                        : env + (target - env) * kDn;
-      
-      // Sparkle envelope
-      {
-        const target = clamp(ampRef.current, 0, 1);
-        const kUp = 1 - Math.exp(-SPARC.attack * dtUsed);
-        const kDn = 1 - Math.exp(-SPARC.release * dtUsed);
-        const e = sparkEnvRef.current;
-        sparkEnvRef.current = target > e ? e + (target - e) * kUp : e + (target - e) * kDn;
-      }
-      
-      // Crossfade envelope
-      {
-        // Crossfade folgt Amplitude gemütlich
-        const target = clamp(ampRef.current, 0, 1);
-        const k = 1 - Math.exp(-3.5 * dtUsed);
-        coreEnvRef.current = coreEnvRef.current + (target - coreEnvRef.current) * k;
-        // Pulsation – langsames Atmen plus leichte Random‑Mod
-        const t = tRef.current;
-        const slow = 0.5 + 0.5 * Math.sin(t * 0.7 + 0.3 * Math.sin(t * 0.11));
-        const jitter = 0.5 + 0.5 * Math.sin(t * 3.1 + 1.7);
-        corePulseRef.current = (1 - CORE.pulseAmt) + CORE.pulseAmt * (0.75 * slow + 0.25 * jitter);
-        // Micro-Jitter für Core
-        corePulseRef.current *= 1.0 + 0.0025 * Math.sin(t * 13.7 + 0.9);
-      }
-      
-      // Ripple phase update
-      {
-        ripplePhaseRef.current += RIP.speed * dtUsed;
-      }
-      
-      // Speckle drift update
-      {
-        speckSeedRef.current += SPECK.speed * dtUsed;
-      }
-      
-      // Twinkle update
-      {
-        // deterministische, leichte PRNG statt Math.random()
-        let seed = speckSeedRef.current;
-        const lcg = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
-        for (let i = 0; i < twinkleBufRef.current.length; i++) {
-          if (lcg() < TWK.rate * dtUsed) twinkleBufRef.current[i] = TWK.boost;
-          twinkleBufRef.current[i] *= Math.exp(-TWK.decay * dtUsed);
-        }
-        speckSeedRef.current = seed;
-      }
-      
-      // Organische Rotation ~ 6°/s mit "Atmen"
-      const baseRot = Math.PI / 30; // ~6°/s
-      const rotMod = 1 + 0.06 * Math.sin(tRef.current * 0.3); // Leichte Modulation
-      rotRef.current += dtUsed * baseRot * rotMod;
-
-      const targetAmplitude = amplitude / 100;
-      ampRef.current = expSlew(ampRef.current, targetAmplitude, 6.6, 4.6, dtUsed);
-
-      // REFR frame loop variables
-      phaseRef.current = (phaseRef.current || 0) + REFR.speed * dtUsed;
-      rimShiftRef.current = REFR.shift * (1 + REFR.breathShift * breathEnvRef.current); // 0..~
-      const rimTarget = REFR.op + REFR.opAmp * Math.min(1, amplitude / 100);
-      rimOpRef.current = expSlewSimple(rimOpRef.current || rimTarget, rimTarget, 0.22, dtUsed);
-
-      setTick(x => (x + 1) % 1000);
-      animationRef.current = requestAnimationFrame(animate);
-    };
-
-    animationRef.current = requestAnimationFrame(animate);
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-        animationRef.current = null;
-      }
-    };
-  }, [isRunning, amplitude]);
-
-  // Optimized circle pulsation with smooth easing
-  const t = tRef.current;
-  const amplitudeEnv = ampRef.current;
-  const eased = smoothstep(0, 1, clamp(amplitudeEnv, 0, 1));
-
-  // Smooth pulsation between 65px and 75px radius
-  const baseRadius = 70;
-      const pulsationRange = 3.5;
-  const baseOmega = 0.8;
-  const driftF = 1.0 + 0.02 * (perlinFn(t * 0.17, 0.07, 2.4) - 0.5);
-  const driftPhi = 0.25 * (perlinFn(t * 0.09, 0.11, 3.1) - 0.5);
-  const puls = Math.sin((baseOmega * driftF) * t + driftPhi);
-  const easedPulsation = smoothstep(-1, 1, puls);
-  const pulsationScale = 1 + (easedPulsation - 0.5) * (pulsationRange / baseRadius);
-
-  // Combine with amplitude scaling for responsive behavior
-  const amplitudeScale = eased * (ANIMATION_CONFIG.amplitudeScaling * 0.3);
-  const mainScale = pulsationScale + amplitudeScale;
-
-  // Calculate target radius with dt-robust smoothing
-  const rTarget = baseRadius * mainScale;
-  const dt = dtEmaRef.current;
-  mainRadiusRef.current = expSlewSimple(mainRadiusRef.current, rTarget, 0.32, dt);
-  const mainRadius = mainRadiusRef.current;
-
-  // Memoized circle paths for performance
-  const circlePath = React.useMemo(() => {
+  // Wave-Ribbon builder: width(s) has mid "belly" + wave harmonics; bend offsets centerline.
+  const makeWaveBlobPath3D = (
+    theta: number,
+    r0: number, r1: number,              // axis start/end
+    w0: number, w1: number,              // base widths near root/toward mid
+    pinch: number,                        // 0.45..0.70 (neck)
+    bias: number,                         // -1..+1 (top/bottom asym)
+    bend: number,                         // -1..+1 lateral curvature
+    phi1: number, phi2: number,          // wave phases
+    sx: number, sy: number, sh: number    // 3D surrogate
+  ) => {
     const p = Skia.Path.Make();
-    // addCircle gibt die Path-Referenz zurück; zusätzliches Return aus addCircle nicht nötig
-    p.addCircle(centerX, centerY, mainRadius);
-    return p;
-  }, [centerX, centerY, mainRadius]);
+    const steps = 40;
+    const top: V2[] = [];
+    const bot: V2[] = [];
+    const L = r1 - r0;
 
-  const circlePathOuter = React.useMemo(() => {
-    const p = Skia.Path.Make();
-    p.addCircle(centerX, centerY, mainRadius * (1.0 + REFR.width));
-    return p;
-  }, [centerX, centerY, mainRadius]);
-
-  const circlePathInnerWarm = React.useMemo(() => {
-    const p = Skia.Path.Make();
-    p.addCircle(centerX, centerY, mainRadius * (1.0 - REFR.width * 0.35));
-    return p;
-  }, [centerX, centerY, mainRadius]);
-
-  // Sphere radius
-  const sphereRadius = mainRadius * ANIMATION_CONFIG.sphereRadiusFactor;
-
-  // Simple blob positions with organic movement and dynamic colors
-  const blobPositions: BlobPosition[] = React.useMemo(() => {
-    const t = tRef.current;
-    const amplitudeEnv = ampRef.current;
-    const eased = smoothstep(0,1, clamp(amplitudeEnv,0,1));
-    const orbScale = 1 + 0.08 * eased;
-  
-    const stablePositions = blobIds.map((blobId) => {
-      const blob = BLOB_CONFIGS[blobId];
-      const blobTime = t * (0.15 + blob.seed * 0.08);
-      const phaseOffset = blob.seed * Math.PI * 2;
-
-      const baseTheta = blobTime * (blob.rotationSpeed * 0.2 * (1 + 0.03*eased)) + phaseOffset;
-      const basePhi = blobTime * (blob.rotationSpeed * 0.15 * (1 + 0.02*eased)) + phaseOffset * 0.5;
-    
-      const pre = precessAngles(
-        { theta: baseTheta, phi: basePhi },
-        t,
-        blob.seed
-      );
-      const rotationMatrix = createRotationMatrix(pre.theta, pre.phi);
-
-      const orbitTime = t * (0.004 + blob.seed * 0.0012) + blob.seed * 0.8;
-      const orbitAngle = blobId * 0.8 + orbitTime;
-    
-      const baseOrbitRadius = sphereRadius * (0.78 * orbScale); // Orbit
-      const clampR = sphereRadius * 0.82; // Grenze - enger für zentrierte Orbits
-    
-      const breathingTime = t * 0.02 + blob.seed * 0.4;
-      const breathingPhase = Math.sin(breathingTime) * 0.15 + 0.85;
-      const breathingRadius = baseOrbitRadius * (0.98 + 0.02 * breathingPhase);
-    
-      // Eccentric orbits with dynamic eccentricity - reduziert für zentrierte Orbits
-      const ecc = 0.05 + 0.02 * Math.sin(t * 0.15 + blob.seed * 3.1);
-    
-      const basePos: Point3D = {
-        x: Math.sin(orbitAngle) * breathingRadius * (1 + ecc),
-        y: Math.cos(orbitAngle) * breathingRadius * (1 - ecc),
-        z: Math.sin(blobId * 0.5 + blob.seed * 0.3) * sphereRadius * (0.4 * orbScale)
-      };
-
-      const rotatedPos = rotate3DPoint(basePos, rotationMatrix);
-      const physicsPos = rotatedPos;
-
-      const rawPerspective = 1 + (physicsPos.z / sphereRadius) * (0.22 + 0.06 * eased);
-    
-      const prevP = perspRef.current[blobId] ?? rawPerspective;
-      const perspective = expSlewSimple(prevP, rawPerspective, 0.28, dtEmaRef.current);
-      perspRef.current[blobId] = perspective;
-    
-      const prevX = xEmaRef.current[blobId] ?? physicsPos.x;
-      const prevY = yEmaRef.current[blobId] ?? physicsPos.y;
-      const prevZ = zEmaRef.current[blobId] ?? physicsPos.z;
-    
-      const smoothedX = expSlewSimple(prevX, physicsPos.x, 0.28, dtEmaRef.current);
-      const smoothedY = expSlewSimple(prevY, physicsPos.y, 0.28, dtEmaRef.current);
-      const smoothedZ = expSlewSimple(prevZ, physicsPos.z, 0.28, dtEmaRef.current);
-    
-      xEmaRef.current[blobId] = smoothedX;
-      yEmaRef.current[blobId] = smoothedY;
-      zEmaRef.current[blobId] = smoothedZ;
-    
-      let projectedX = centerX + smoothedX * perspective;
-      let projectedY = centerY + smoothedY * perspective;
-      const dx = projectedX - centerX, dy = projectedY - centerY;
-      const dist = Math.hypot(dx, dy) || 1;
-      if (dist > clampR) {
-        const k = clampR / dist;
-        projectedX = centerX + dx * k;
-        projectedY = centerY + dy * k;
-      }
-
-      const zDepth = (smoothedZ + sphereRadius) / (2 * sphereRadius);
-      const frontness = clamp((smoothedZ / sphereRadius) * 0.5 + 0.5, 0, 1);
-    
-      const frontColorBoost = 0.20 * frontness; // vorn +20% Sättigung on top
-    
-      const enhancedDepthScale = 1.0;       // keine Größe aus Z
-      const enhancedDepthOpacity = 0.75;    // konstante Sichtbarkeit
-
-      // Farbsystem gemäß Slots + Lautstärke-Kopplung an Feldstärke
-      const huePalette = [195, 270, 310, 220, 155]; // cyan, violet, magenta, blue, green
-      const baseHue = huePalette[blobId % huePalette.length];
-      const targetHue = baseHue; // Slot fix, geringe Drift optional
-      const loud = clamp(ampRef.current, 0, 1);
-      // Dynamik: Sättigung +7–15%, Luminanz +4–8% bei Lautstärke - abgeschwächt
-      const satBoost = 0.07 + 0.08 * loud; // 7–15%
-      const lumBoost = 0.04 + 0.04 * loud; // 4–8%
-      const targetSaturation = Math.round( (baseHue===155?0.75:0.85) * 100 * (1 + satBoost) ); // 75–85% Basis
-      const targetLightness = Math.round( (baseHue===155?0.55:0.60) * 100 * (1 + lumBoost) ); // 55–60% Basis
-    
-      const targetHSL = { h: targetHue, s: targetSaturation, l: targetLightness };
-      const prevHSL = blobColorsRef.current[blobId] || targetHSL;
-      const dtLocal = dtEmaRef.current;
-      const newHSL = updateBlobColorSmooth(prevHSL, targetHSL, dtLocal);
-
-      // kein frontness-Boost
-      const boostedH = newHSL.h;
-      const boostedS = newHSL.s;
-      const boostedL = newHSL.l;
-
-      // Frontness boost - reduziert für sattere Farben
-      const frontnessBoost = clamp((smoothedZ / sphereRadius) * 0.5 + 0.5, 0, 1);
-      const adjHSL = { 
-        h: newHSL.h, 
-        s: Math.max(0, Math.min(100, newHSL.s + 1.2 * frontnessBoost)), 
-        l: Math.max(0, Math.min(100, newHSL.l + 0.8 * frontnessBoost)) 
-      };
-      const newRGB = hslToRgb(adjHSL.h, adjHSL.s, adjHSL.l);
-    
-      blobColorsRef.current[blobId] = {
-        h: newHSL.h,
-        s: newHSL.s,
-        l: newHSL.l,
-        r: newRGB.r,
-        g: newRGB.g,
-        b: newRGB.b
-      };
-      const prevRGB = colorEMARef.current[blobId] || newRGB;
-      const smoothedRGB = {
-        r: expSlewSimple(prevRGB.r, newRGB.r, 0.28, dtEmaRef.current),
-        g: expSlewSimple(prevRGB.g, newRGB.g, 0.28, dtEmaRef.current),
-        b: expSlewSimple(prevRGB.b, newRGB.b, 0.28, dtEmaRef.current)
-      };
-      colorEMARef.current[blobId] = smoothedRGB;
-    
-      const dynamicColor = { 
-        h: newHSL.h, 
-        s: newHSL.s, 
-        l: newHSL.l,
-        r: smoothedRGB.r,
-        g: smoothedRGB.g,
-        b: smoothedRGB.b
-      };
-    
-      return {
-        blobId,
-        x: projectedX,
-        y: projectedY,
-        z: smoothedZ,
-        depthScale: enhancedDepthScale,
-        depthOpacity: enhancedDepthOpacity,
-        color: dynamicColor,
-        isVisible: smoothedZ > -sphereRadius * 0.95
-      };
-    });
-
-    return stablePositions.sort((a,b) => a.z - b.z);
-  }, [tick, mainRadius, centerX, centerY]);
-
-  // Create main circle path with optimized pulsation
-  const mainCirclePath = React.useMemo(() => {
-    const t = tRef.current;
-    const amplitudeEnv = ampRef.current;
-    const mainTime = t * 0.8;
-    const eased = smoothstep(0, 1, clamp(amplitudeEnv, 0, 1));
-    const amplitudeFactor = eased * 0.1;
-
-    const mainConfig: BlobConfig = {
-      colorKey: 'siriBlue',
-      size: 1.0,
-      phases: [0, 0, 0],
-      frequencies: [1.5, 2.8, 4.5],
-      amplitudes: [0.003, 0.002, 0.0015],
-      speeds: [0.5, 0.8, 1.2],
-      rotationSpeed: 0,
-      breathingFreq: 0.6,
-      breathingAmp: 0.02,
-      seed: 0.1
-    };
-
-    return createSiriBlobPath(
-      centerX,
-      centerY,
-      mainRadius * 0.98,
-      mainTime,
-      amplitudeFactor,
-      mainConfig,
-      mainNoise,
-      true,
-      totalDefEmaMapRef
-    );
-  }, [tick, mainRadius, centerX, centerY]);
-
-  // Einheitliche Lichtrichtung: leicht links/oben für konsistenten Siri-Look
-  const lightDir = React.useMemo(() => {
-    const lx = -0.68, ly = -0.60;
-    const len = Math.hypot(lx, ly) || 1;
-    return { x: lx/len, y: ly/len };
-  }, []);
-
-  const lightAngle = Math.atan2(lightDir.y, lightDir.x) + Math.PI;
-  const arcAngle = lightAngle;
-
-  // Arc sector helper function
-  const makeArcSector = (cx:number, cy:number, rInner:number, rOuter:number, angle:number, arcDeg:number) => {
-    const arc = (arcDeg * Math.PI) / 180;
-    const steps = 36;
-    const p = Skia.Path.Make();
     for (let i = 0; i <= steps; i++) {
-      const a = angle - arc/2 + (i/steps) * arc;
-      const x = cx + rOuter * Math.cos(a);
-      const y = cy + rOuter * Math.sin(a);
-      if (i === 0) p.moveTo(x, y); else p.lineTo(x, y);
+      const s = i / steps;               // 0..1 along axis
+      const x = r0 + L * s;
+
+      // "Lens" profile: wide in der Mitte, schlanker an Wurzel/Spitze
+      const belly = Math.sin(Math.PI * s);                       // peak at 0.5
+      const base = lerp(w0, w1, smoothstep(0.05, 0.70, s)) * (0.68 + 0.32 * belly);
+
+      // Wave modulation (2 harmonics) -> echte Formveränderung
+      // Siri-typische "atmen"-Wellen: stärkere 2. Harmonik, leicht verschobene 4.
+      const mod = 1
+        + 0.06 * Math.sin(2 * Math.PI * s + phi1)
+        + 0.03 * Math.sin(4 * Math.PI * s + phi2 + 0.35);
+
+      const width = clamp(base * mod, 0, L * 0.9);
+      const neck = lerp(1.0, 0.78, pinch);                       // neck factor (nicht zu spitz)
+      const wTop = width * neck * (1 + 0.55 * bias);
+      const wBot = width * neck * (1 - 0.55 * bias);
+
+      // gentle S-like bend of the centerline
+      const sB = s - 0.35;
+      const curve = bend * L * 0.17 * sB * (1 - s);              // etwas stärkere S-Biegung
+
+      const P = (yy: number): V2 => {
+        const localY = yy + curve;
+        const xl = sx * x + sh * localY, yl = sy * localY;
+        const ux = Math.cos(theta), uy = Math.sin(theta);
+        const vx = -Math.sin(theta), vy = Math.cos(theta);
+        return { x: centerX + ux * xl + vx * yl, y: centerY + uy * xl + vy * yl };
+      };
+
+      top.push(P(+wTop));
+      bot.push(P(-wBot));
     }
-    for (let i = steps; i >= 0; i--) {
-      const a = angle - arc/2 + (i/steps) * arc;
-      p.lineTo(cx + rInner * Math.cos(a), cy + rInner * Math.sin(a));
-    }
+
+    const poly = top.concat(bot.reverse());
+    cubicThrough(p, poly);
     p.close();
     return p;
   };
 
-  // 2.4: kleine Helper für Rim-Segmente
-  const rimAngles = React.useMemo(() => {
-    // Grundausrichtung: Licht kommt leicht links/oben -> wir starten um -45°
-    const base = Math.atan2(lightDir.y, lightDir.x) + Math.PI; // Rim Richtung "weg" von Licht
+  // Zeitlich unabhängiger Smoother für ruhige 3D-Bewegung
+  const smoothToward = (cur: number, target: number, dt: number, tau: number) =>
+    cur + (target - cur) * (1 - Math.exp(-dt / Math.max(1e-3, tau)));
+
+  // State-Packs für gekoppelte 3D-Surrogates + Morph-Kanäle pro Blob
+  const Cstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+  const Bstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+  const Mstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+
+  // Amplitude 0..1 + Glättung
+  const ampTarget = clamp(amplitude / 100, 0, 1);
+  const [ampSmooth, setAmpSmooth] = useState(0);
+  useEffect(() => { 
+    setAmpSmooth(prev => {
+      const isAttack = ampTarget > prev;
+      const rate = isAttack ? 0.17 : 0.08; // Siri-typisch harmonisiert
+      return prev + (ampTarget - prev) * rate;
+    });
+  }, [ampTarget]);
+
+  // Phase C: eigener Envelope (schneller Attack, langsamer Release)
+  const [ampEnvC, setAmpEnvC] = useState(0);
+  useEffect(() => {
+    setAmpEnvC(prev => {
+      const isAttack = ampTarget > prev;
+      const rate = isAttack ? 0.24 : 0.06;
+      return prev + (ampTarget - prev) * rate;
+    });
+  }, [ampTarget]);
+
+  // Keine globale Rotation mehr – Blobs stehen wie bei Siri übereinander
+
+  // Phase C: integrierte Phase für Mikrodynamik (kein Modulo-Flackern)
+  const lastTc = useValue(0);
+  const phaseC = useValue(0);
+
+  
+  
+  // Normalisierte Geometrie - Amplitude nur für subtilen Bloom
+  const baseRadius = Math.min(width, height) * 0.23; // 0.22–0.26 ist Siri-typisch
+  const ringRadius = baseRadius; // Konstanter Ring-Radius
+  
+  // Innere Ringe für mehr Tiefe
+  const innerRadius = ringRadius * 0.6;
+  const outerGlowRadius = ringRadius * 1.4 + (ampSmooth * 8); // Amplitudengesteuert
+  
+  // Robuster Kreis-Clip statt Mask (verhindert Artefakte)
+  const orbClip = useMemo(() => {
+    const p = Skia.Path.Make();
+    p.addCircle(centerX, centerY, ringRadius);
+    return p;
+  }, [centerX, centerY, ringRadius]);
+  
+  // Rainbow-Regler (vorhanden, aber standardmäßig deaktiviert)
+  const ringAmp = Math.pow(ampSmooth, 0.75);
+  const ringWidth = lerp(0.020, 0.036, ringAmp);   // leicht schmaler
+  const ringGain  = lerp(0.24, 0.40, ringAmp);     // etwas sanfter
+  const showRing = false; // OG Siri: kein bunter Ring / kein sichtbarer Border
+  
+  const blobAlphaBase = 0.55;
+  const blobAlpha = blobAlphaBase + 0.28 * ampSmooth;
+  const blobSoft = 0.72; // reserved
+  const blobScale = ringRadius * 0.95;
+
+  // Neutrale Blobs: keine Farbverschiebung, nur Helligkeit/“Sättigung”
+  // Vorherige farbige Version deaktiviert:
+  // false && (() => {
+  //   const prevBlobColors = (hex: string, aCore = blobAlpha) => {
+  //     switch (hex.toUpperCase()) {
+  //       case '#38E1FF': return ['rgba(56,225,255,0.90)','rgba(56,225,255,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       case '#FF4FD8': return ['rgba(255,79,216,0.90)','rgba(255,79,216,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       case '#4CB6FF': return ['rgba(76,182,255,0.90)','rgba(76,182,255,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       default: return [Skia.Color(hex).toString(), Skia.Color(hex).toString(), `rgba(255,255,255,${aCore * 0.10})`];
+  //     }
+  //   };
+  //   return prevBlobColors;
+  // })();
+  const blobColors = (hex: string, aCore = blobAlpha) => {
+    switch (hex.toUpperCase()) {
+      case '#38E1FF': // Cyan
+        return [
+          `rgba(56,225,255,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(56,225,255,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      case '#FF4FD8': // Magenta
+        return [
+          `rgba(255,79,216,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(255,79,216,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      case '#4CB6FF': // Blau
+        return [
+          `rgba(76,182,255,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(76,182,255,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      default:
+        return [
+          Skia.Color(hex).toString(),
+          Skia.Color(hex).toString(),
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+    }
+  };
+  const blobPositions = [0.0, 0.46, 1.0];
+  
+  // Siri-Blobs: heller Kern -> satter Midtone -> weiches Tail
+  // Helper: rgba from tuple
+  const rgba = (rgb: [number, number, number], a: number) =>
+    `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+  // Siri-Palette: exakte Farbspur
+  const ramp: [number, number, number][] = [
+    [0,199,255], [58,168,255], [122,77,255], [255,44,195], [255,138,76], [0,199,255]
+  ];
+  const mixRGB = (a: [number, number, number], b: [number, number, number], t: number) =>
+    [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)] as [number, number, number];
+  const colorCycle = (u: number) => {
+    const n = ramp.length - 1;
+    const x = u - Math.floor(u); // fract(u) ohne Modulo
+    const i = Math.floor(x * n);
+    const t = x * n - i;
+    return mixRGB(ramp[i], ramp[i + 1], t);
+  };
+
+  const blobStops = (rgb: [number, number, number]) => ({
+    colors: [
+      `rgba(255,255,255,${0.48 + 0.38 * ampSmooth})`,
+      rgba(rgb, 0.86),
+      rgba(rgb, 0.30),
+      'rgba(0,0,0,0.00)',
+    ],
+    positions: [0.00, 0.14, 0.72, 1.00]
+  });
+
+  // Lokales Achsensystem -> Weltkoordinaten (Winkel theta)
+  const toWorld = (theta: number, x: number, y: number) => {
+    const ux = Math.cos(theta), uy = Math.sin(theta);
+    const vx = -Math.sin(theta), vy = Math.cos(theta);
+    return { x: centerX + ux * x + vx * y, y: centerY + uy * x + vy * y };
+  };
+
+  // Blattförmiger Pfad (Basis): schmale Wurzel -> bauchige Spitze
+  const makePetalPath = (
+    theta: number,
+    r0: number, r1: number,
+    w0: number, w1: number,
+    pinch: number,             // 0.35..0.65
+    c1 = 0.33, c2 = 0.72       // Kurvenverlauf entlang der Achse
+  ) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1;
+    const L2 = r0 + (r1 - r0) * c2;
+    const P0t = toWorld(theta, r0, +w0 * pinch);
+    const P0b = toWorld(theta, r0, -w0 * pinch);
+    const C1t = toWorld(theta, L1, +((w0 + w1) * 0.55));
+    const C2t = toWorld(theta, L2, +(w1));
+    const Tip = toWorld(theta, r1, 0);
+    const C2b = toWorld(theta, L2, -(w1));
+    const C1b = toWorld(theta, L1, -((w0 + w1) * 0.55));
+    p.moveTo(P0t.x, P0t.y);
+    p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y);
+    p.close();
+    return p;
+  };
+
+
+  // Stabile Seeds für unabhängige 3D-Morphs pro Blob
+  const seeds = useMemo(() => ({
+    C: { yaw: 17, pit: 23, rol: 31, pin: 37 },
+    B: { yaw: 29, pit: 41, rol: 53, pin: 59 },
+    M: { yaw: 71, pit: 83, rol: 97, pin: 103 },
+  }), []);
+
+  // 3D-Helper für Petal-Pfade
+  const toWorld3D = (theta: number, x: number, y: number, sx: number, sy: number, sh: number) => {
+    const xl = sx * x + sh * y, yl = sy * y;
+    const ux = Math.cos(theta), uy = Math.sin(theta);
+    const vx = -Math.sin(theta), vy = Math.cos(theta);
+    return { x: centerX + ux * xl + vx * yl, y: centerY + uy * xl + vy * yl };
+  };
+
+  const makePetalPath3D = (theta: number, r0: number, r1: number, w0: number, w1: number, pinch: number, sx: number, sy: number, sh: number, c1 = 0.33, c2 = 0.72) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1, L2 = r0 + (r1 - r0) * c2;
+    const P0t = toWorld3D(theta, r0, +w0 * pinch, sx, sy, sh);
+    const P0b = toWorld3D(theta, r0, -w0 * pinch, sx, sy, sh);
+    const C1t = toWorld3D(theta, L1, +((w0 + w1) * 0.55), sx, sy, sh);
+    const C2t = toWorld3D(theta, L2, +(w1), sx, sy, sh);
+    const Tip  = toWorld3D(theta, r1, 0, sx, sy, sh);
+    const C2b = toWorld3D(theta, L2, -(w1), sx, sy, sh);
+    const C1b = toWorld3D(theta, L1, -((w0 + w1) * 0.55), sx, sy, sh);
+    p.moveTo(P0t.x, P0t.y); p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y); p.close(); return p;
+  };
+
+  // Morphing Path Builder mit Asymmetrie + Biegung
+  const makeBlobPathMorph = (
+    theta: number,
+    r0: number, r1: number,
+    w0: number, w1: number,
+    pinch: number,       // 0.45..0.70
+    bias: number,        // -1..+1 (oben/unten asym)
+    bend: number,        // -1..+1 (seitliche Biegung)
+    c1: number, c2: number,
+    sx: number, sy: number, sh: number
+  ) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1;
+    const L2 = r0 + (r1 - r0) * c2;
+
+    // seitliche Biegung entlang der Achse (0=root .. 1=tip)
+    const bendAmt = r1 * 0.12 * bend;
+    const off = (s: number) => (s - 0.15) * bendAmt;
+
+    // Asymmetrie: obere/untere Kante unterschiedlich
+    const w0t = w0 * pinch * (1 + 0.60 * bias);
+    const w0b = w0 * pinch * (1 - 0.60 * bias);
+    const w1t = w1 * (1 + 0.40 * bias);
+    const w1b = w1 * (1 - 0.40 * bias);
+
+    const P = (x: number, y: number, s: number) => toWorld3D(theta, x, y + off(s), sx, sy, sh);
+    const s0 = 0, s1 = c1, s2 = c2, s3 = 1;
+
+    const P0t = P(r0, +w0t, s0);
+    const P0b = P(r0, -w0b, s0);
+    const C1t = P(L1, +((w0t + w1t) * 0.55), s1);
+    const C2t = P(L2, +(w1t), s2);
+    const Tip =  P(r1, 0, s3);
+    const C2b = P(L2, -(w1b), s2);
+    const C1b = P(L1, -((w0b + w1b) * 0.55), s1);
+
+    p.moveTo(P0t.x, P0t.y);
+    p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y);
+    p.close();
+    return p;
+  };
+
+  // Feste Siri-Ausrichtung: links-oben (C), rechts-oben (B), unten (M)
+  const ANG_L = deg(125);
+  const ANG_R = deg(55);
+  const ANG_B = deg(-90);
+  
+  // Skia Clock
+  const clock = useClockValue();
+
+  // reaktive Zeit (in s)
+  const tCV = useComputedValue(() => (isRunning ? clock.current / 1000 : 0), [clock, isRunning]);
+
+  // Idle: ruhige, non-loop Noise-Amplitude (0.06..0.18)
+  const idleAmp = (t: number) => {
+    const n = 0.5 + 0.5 * fbm1D(t * 0.055, 1337, 4); // sehr langsame, nicht periodische Drift
+    return 0.05 + 0.10 * n;  // dezenter für näher am Original
+  };
+
+  // Sprecherkennungsschwelle (klein halten, damit Idle selten "anspringt")
+  const TALK_GATE = 0.14;
+
+  // sanfte globale Drift (kleiner Orientierungswobble)
+  const thetaDriftCV = useComputedValue(() => 0.18 * Math.sin(tCV.current * 0.35), [tCV]);
+
+  // globale Orb-Neigung → anisotrope Skalierung + Shear (Siri-Glaslook)
+  const tiltCV = useComputedValue(() => {
+    const t = tCV.current;
+    const yaw   = 0.035 * Math.sin(t * 0.16 + 0.6);   // Siri-typisch
+    const pitch = 0.045 * Math.sin(t * 0.18 - 0.8);   // Siri-typisch
+    const roll  = 0.05 * Math.sin(t * 0.14 + 2.2);   // Siri-typisch
     return {
-      // drei Segmente über den Kreis verteilt
-      cyan: base - Math.PI * 0.25,      // ~oben-links (Lichtseite)
-      violet: base + Math.PI * 0.12,    // seitlich
-      magenta: base + Math.PI * 0.48,   // unten-rechts
+      sx: 1 + 0.20 * yaw,
+      sy: 1 - 0.16 * pitch,
+      sh: 0.22 * roll,
     };
-  }, [lightDir]);
+  }, [tCV]);
 
-  // Shape smoothing refs for each blob
-  const shapeRefs = React.useRef<{ [key: number]: { sx: number; sy: number; sh: number } }>({});
-  
-  // Path memoization cache
-  const pathCache = React.useRef<{ [key: string]: SkPath }>({});
-  
-  // Create unified blob data array with performance optimization
-  // BASELINE: Minimaler, funktionierender Einzel-Blob
-  const blobDataArray: BlobData[] = React.useMemo(() => {
-    // Blob-Setup: Atmen exakt wie Siri mit ease-in/out
-    const breathT = tRef.current * (2*Math.PI/7.8); // ~7.8s
-    const raw = Math.sin(breathT);
-    const easedRaw = 0.5 - 0.5 * Math.cos((raw * 0.5 + 0.5) * Math.PI); // ease-in-out auf dem Sinus
-    const blobScale = 1 + 0.010 * (easedRaw - 0.5) * 2; // weiterhin ±1.0%
-    const baselineRadius = mainRadius * 0.72 * blobScale;
-    const path = makeBlobPath2D(centerX, centerY, baselineRadius, tRef.current, 0, 0, shapeRefs, 0);
-    
-    return [{
-      index: 0,
-      blobId: 0,
-      position: { 
-        x: centerX, 
-        y: centerY, 
-        z: 0, 
-        isVisible: true, 
-        depthScale: 1.0, 
-        blobId: 0,
-        depthOpacity: 1.0,
-        color: { r: 100, g: 150, b: 255, h: 220, s: 100, l: 70 }
-      },
-      blob: BLOB_CONFIGS[0],
-        path,
-      finalRadius: baselineRadius,
-      adjustedX: centerX,
-      adjustedY: centerY,
-      depthOpacity: 1.0
-    }];
-  }, [tick, mainRadius, centerX, centerY]);
-
-  // Create glow path with individual timing
-  const glowPath = React.useMemo(() => {
-    const t = tRef.current;
-    const amplitudeEnv = ampRef.current;
-    const glowRadius = mainRadius * 1.35;
-    const glowTime = t * 0.06;
-    const eased = smoothstep(0, 1, clamp(amplitudeEnv, 0, 1));
-    const amplitudeFactor = eased * 0.1;
-
-    const glowConfig: BlobConfig = {
-      colorKey: 'siriBlue',
-      size: 1.0,
-      phases: [0, 0, 0],
-      frequencies: [2.1, 3.7, 6.2],
-      amplitudes: [0.012, 0.008, 0.006],
-      speeds: [0.7, 1.1, 1.5],
-      rotationSpeed: 0,
-      breathingFreq: 0.9,
-      breathingAmp: 0.03,
-      seed: 0.1
+  // per-Blob Mikrotilt (leicht phasenversetzt für Parallaxe)
+  const microTilt = (phase: number) => useComputedValue(() => {
+    const t = tCV.current + phase;
+    const base = tiltCV.current;
+      return {
+      sx: base.sx * (1 + 0.05 * Math.sin(t * 0.9)),
+      sy: base.sy * (1 - 0.05 * Math.sin(t * 0.85)),
+      sh: base.sh + 0.06 * Math.sin(t * 1.1),
     };
+  }, [tCV, tiltCV]);
 
-    return createSiriBlobPath(
-      centerX,
-      centerY,
-      glowRadius,
-      glowTime,
-      amplitudeFactor,
-      glowConfig,
-      mainNoise,
-      true,
-      totalDefEmaMapRef,
-      0,
-      shapeRefs
-    );
-  }, [tick, mainRadius, centerX, centerY]);
+  const topTiltCV   = microTilt(0.0);
+  const rightTiltCV = microTilt(2.1);
+  const leftTiltCV  = microTilt(4.2);
 
-  // 2.5: kombinierte Helligkeitsumgebung
-  const haloEnv = (() => {
-    const k = breathEnvRef.current;           // 0..1 breath
-    const a = clamp(ampRef.current, 0, 1);    // 0..1 amplitude
-    // Gewichtung: Breath 40%, Amplitude 60% (dezenter Boost)
-    return clamp(0.40 * k + 0.60 * a, 0, 1);
-  })();
+  // Orbitale Parallaxe: Blobs kreisen leicht um das Zentrum (Siri-typisch)
+  const orbitCV = useComputedValue(() => {
+    const t = tCV.current;
+    const Ax = ringRadius * 0.024;  // x-Amplitude (Siri-typisch, dezenter)
+    const Ay = ringRadius * 0.036;  // y-Amplitude (Siri-typisch, dezenter)
+      return {
+      top:   { x:  Ax * Math.sin(t * 0.24 + 2.1), y: -Ay * Math.cos(t * 0.22 + 0.7) },
+      right: { x:  Ax * Math.cos(t * 0.20 + 0.2), y:  Ay * Math.sin(t * 0.26 + 1.6) },
+      left:  { x: -Ax * Math.cos(t * 0.22 + 2.6), y: -Ay * Math.sin(t * 0.24 + 3.2) },
+    };
+  }, [tCV]);
 
-  // 2.5: versetzte Phase für Halo (verhindert gleichzeitige Peaks)
-  const haloPhase = (() => {
-    const phase = breathPhaseRef.current + 0.35; // 0.35 radian offset (~20°)
-    return 0.5 - 0.5 * Math.cos(phase); // 0..1, ease-in-out
-  })();
+  // Transform-CVs mit einfacher Tiefen-Skalierung
+  const depthScaleCV = useComputedValue(() => {
+    const scale = (y: number) => 1 + (y / (ringRadius * 0.80)) * 0.08;
+    const { top, right, left } = orbitCV.current;
+    return { top: scale(top.y), right: scale(right.y), left: scale(left.y) };
+  }, [orbitCV]);
 
-  // 2.6: Ripple-Umgebung
-  const rippleEnv = (() => {
-    const a = clamp(ampRef.current, 0, 1);     // treibt Stärke
-    const k = breathEnvRef.current;            // atmet Breite leicht
-    return { a, k };
-  })();
+  const topXformCV = useComputedValue(() => {
+    const o = orbitCV.current.top; const s = depthScaleCV.current.top;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
+  const rightXformCV = useComputedValue(() => {
+    const o = orbitCV.current.right; const s = depthScaleCV.current.right;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
+  const leftXformCV = useComputedValue(() => {
+    const o = orbitCV.current.left; const s = depthScaleCV.current.left;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
 
-  // Leichte Opacity-Jitter gegen Banding (subtil)
-  const popJit = 1.0 + 0.04 * Math.sin(tRef.current * 1.7 + 0.9);
-  const rimOpacityPop = rimOpRef.current * popJit;
+  // Frontness -> leichte Helligkeitsänderung je nach "Tiefe" (y-Position im Orbit) - ruhiger
+  const frontnessCV = useComputedValue(() => {
+    const f = (y: number) => clamp(0.88 + (y / (ringRadius * 0.12)) * 0.18, 0.75, 1.00); // ruhiger
+    const { top, right, left } = orbitCV.current;
+    return { top: f(top.y), right: f(right.y), left: f(left.y) };
+  }, [orbitCV]);
+  const topOpacityCV   = useComputedValue(() => frontnessCV.current.top,   [frontnessCV]);
+  const rightOpacityCV = useComputedValue(() => frontnessCV.current.right, [frontnessCV]);
+  const leftOpacityCV  = useComputedValue(() => frontnessCV.current.left,  [frontnessCV]);
 
-  return (
-    <View style={{ 
-      width: '100%', 
-      height: '100%', 
-      backgroundColor: defaultBackground(isDarkMode),
-      justifyContent: 'center', 
-      alignItems: 'center', 
-      margin: 0 
-    }}>
-      <Canvas 
-        style={{ width: '100%', height: '100%' }}
-        // Konsistente Farbraum-Einstellungen für Baseline-Test
-        // Keine globalen Transformationen oder Filter
-      >
-        
-        
-        {/* RENDER ORDER: Top to Bottom */}
-        
-        {/* 1. Outer Bloom and Vignette (BLOOM) */}
-        {(() => {
-          const R = mainRadius;
-          const cx = centerX, cy = centerY + R * BLOOM.tilt;
-          // Edge Bloom
+  // Breath muss ebenso auf clock hören
+  const breath = useComputedValue(() => {
+    const t = tCV.current;
+    const n = fbm1D(t * 0.08, 901, 4);
+    return 0.5 + 0.5 * n;
+  }, [tCV]);
+
+  const sceneBreathTransform = useComputedValue(() => {
+    const depth = lerp(0.018, 0.046, ampSmooth);
+    const scale = 1 + depth * (breath.current * 2 - 1);
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: scale }, { scaleY: scale },
+      { translateX: -centerX }, { translateY: -centerY },
+    ];
+  }, [breath, ampSmooth]);
+
+  // Farb-Cycling (nach tCV-Deklaration)
+  const colorC = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.00) % 1), [tCV]);
+  const colorB = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.33) % 1), [tCV]);
+  const colorM = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.66) % 1), [tCV]);
+
+  // SkSL Meta-Petals Shader
+  const metaPetalFx = useMemo(() => Skia.RuntimeEffect.Make(META_PETAL_SRC)!, []);
+
+  // Statische Default-Uniforms (Siri-Design ohne Animation)
+  const uniformsDefault = useMemo(() => {
+    const blob = ringRadius * 0.95;
+
+    const aTop = (-Math.PI/2);
+    const aRight = (Math.PI/6);
+    const aLeft = (7*Math.PI/6);
+
+    const LTop = blob * 0.66;
+    const LRight = blob * 0.68;
+    const LLeft = blob * 0.67;
+
+    const slim = 0.92;
+    const w0Top = blob * (0.16 * slim * 1.06); // +6% für weniger säulenförmig
+    const w1Top = blob * (0.36 * slim);
+    const w0Right = blob * (0.14 * slim);
+    const w1Right = blob * (0.34 * slim);
+    const w0Left = blob * (0.15 * slim);
+    const w1Left = blob * (0.35 * slim);
+
+    const pinchTop = 0.53, pinchRight = 0.56, pinchLeft = 0.57; // -0.03 im Idle
+    const bendTop = 0.02, bendRight = 0.015, bendLeft = -0.02;
+
+    const oAmp = ringRadius * 0.052; // leicht erhöht für sichtbarere Trennung
+    const offTop   = [0.0, -oAmp] as [number, number];
+    const offRight = [ oAmp * 0.95,  oAmp * 0.45] as [number, number];
+    const offLeft  = [-oAmp * 1.00,  oAmp * 0.55] as [number, number];
+
+    const sx = 1.00, sy = 0.92, sh = 0.05;
+
+    const u_thresh = SIRI_STRICT_PRESET.idle_thresh;  // 0.58 für Siri-Strict
+    const u_soft   = SIRI_STRICT_PRESET.idle_soft;    // 0.045 für Siri-Strict
+
+    const coreStrength = SIRI_STRICT_PRESET.coreStrength;  // 0.35 für Siri-Strict
+    const coreR1 = blob * SIRI_STRICT_PRESET.coreR1Mul;    // 0.10 für Siri-Strict
+    const coreR2 = blob * SIRI_STRICT_PRESET.coreR2Mul;    // 0.16 für Siri-Strict
+
+    // Feder-Taper & Dominanz Parameter (Siri-Strict)
+    const tipStart = SIRI_STRICT_PRESET.tipStart;  // 0.74
+    const tipEnd = SIRI_STRICT_PRESET.tipEnd;      // 0.992
+    const tipPow = SIRI_STRICT_PRESET.tipPow;      // 1.60
+    const domPow = SIRI_STRICT_PRESET.domPow;      // 1.40
+
+    return {
+      u_res: [width, height] as [number, number],
+      u_center: [centerX, centerY] as [number, number],
+
+      aTop,   LTop,   w0Top,   w1Top,   pinchTop,   bendTop,
+      aRight, LRight, w0Right, w1Right, pinchRight, bendRight,
+      aLeft,  LLeft,  w0Left,  w1Left,  pinchLeft,  bendLeft,
+
+      colTop:   [1.00, 0.172, 0.765],  // #FF2CC3
+      colRight: [0.000, 0.780, 1.000], // #00C7FF
+      colLeft:  [0.478, 0.302, 1.000], // #7A4DFF
+
+      u_thresh, u_soft,
+      coreR1, coreR2, coreStrength,
+
+      offTop, offRight, offLeft,
+      sxTop: sx, syTop: sy, shTop: sh,
+      sxRight: sx, syRight: sy, shRight: sh,
+      sxLeft: sx, syLeft: sy, shLeft: sh,
+      bTop: 1.0, bRight: 1.0, bLeft: 1.0,
+
+      // Feder-Taper & Dominanz
+      tipStart, tipEnd, tipPow, domPow,
+    };
+  }, [width, height, centerX, centerY, ringRadius]);
+
+  // Uniforms reaktiv setzen (Zeit/Amplitude → Form)
+  const uniformsCV = useComputedValue(() => {
+    const t = tCV.current;
+
+    // Idle vs Talking
+    const talking = !DEFAULT_STATE && isRunning && ampSmooth > TALK_GATE;
+    const ampIdle = idleAmp(t);                    // 0.06..0.18
+    const amp = talking ? Math.min(Math.max(ampSmooth, 0), 1) : ampIdle;
+
+    // Skala der Formänderung abhängig vom Modus
+    const lenScale  = talking ? 0.26 : 0.06;       // Idle: geringe Längenänderung
+    const wScale    = talking ? 1.00 : 0.92;       // Idle: etwas schlanker (Siri-Look)
+    const pinchBias = talking ? 0.18 : 0.06;       // Idle: weniger "Neck"-Pumping
+    const bendAmt   = talking ? 1.00 : 0.55;       // Idle: geringere S-Biegung
+
+    const rr = ringRadius;
+    const blob = rr * 0.95;
+
+    // Winkel (mini wobble, identisch in Idle/Talking)
+    const aTop   = (-Math.PI/2) + 0.015 * Math.sin(t * 0.18 + 0.9);
+    const aRight = ( Math.PI/6) + 0.012 * Math.sin(t * 0.20 + 2.1);
+    const aLeft  = (7*Math.PI/6) + 0.018 * Math.sin(t * 0.16 + 4.2);
+
+    // Längen – Idle hat nur ~±6% Variation, Talking wie gehabt
+    const LTop   = blob * (0.66 + lenScale*amp + 0.006 * Math.sin(t * 0.18));
+    const LRight = blob * (0.68 + lenScale*amp + 0.006 * Math.sin(t * 0.16 + 0.7));
+    const LLeft  = blob * (0.67 + lenScale*amp + 0.006 * Math.sin(t * 0.20 + 1.1));
+
+    // Breiten – Idle schlanker und ruhiger
+    const w0Top   = blob * ((0.16 + 0.10*(1 - amp)) * wScale);
+    const w1Top   = blob * ((0.36 + 0.20*(1 - amp)) * wScale);
+    const w0Right = blob * ((0.14 + 0.10*(1 - amp)) * wScale);
+    const w1Right = blob * ((0.34 + 0.22*(1 - amp)) * wScale);
+    const w0Left  = blob * ((0.15 + 0.10*(1 - amp)) * wScale);
+    const w1Left  = blob * ((0.35 + 0.22*(1 - amp)) * wScale);
+
+    const pinchTop   = 0.56 + pinchBias*amp + 0.01 * Math.sin(t * 0.22);
+    const pinchRight = 0.56 + pinchBias*amp + 0.01 * Math.sin(t * 0.20 + 0.6);
+    const pinchLeft  = 0.57 + pinchBias*amp + 0.01 * Math.sin(t * 0.24 + 1.2);
+
+    const bendTop   = 0.05 * bendAmt * Math.sin(t * 0.18 + 1.7);
+    const bendRight = 0.04 * bendAmt * Math.sin(t * 0.16 + 0.9);
+    const bendLeft  = 0.05 * bendAmt * Math.sin(t * 0.20 + 2.3);
+
+    // Orbit/Parallaxe & Mikro‑Tilt wie gehabt
+    const oT = orbitCV.current.top;
+    const oR = orbitCV.current.right;
+    const oL = orbitCV.current.left;
+
+    const { sx: sxT, sy: syT, sh: shT } = topTiltCV.current;
+    const { sx: sxR, sy: syR, sh: shR } = rightTiltCV.current;
+    const { sx: sxL, sy: syL, sh: shL } = leftTiltCV.current;
+
+    const bT = frontnessCV.current.top;
+    const bR = frontnessCV.current.right;
+    const bL = frontnessCV.current.left;
+
+    // Kante/Weichheit – Idle etwas konservativer, damit Ränder nicht "ausbluten"
+    const ampE = Math.pow(Math.min(Math.max(amp, 0), 1), 0.85);
+    const u_thresh = talking ? (0.60 - 0.16 * ampE) : 0.56;
+    const u_soft   = talking ? lerp(0.070, 0.050, ampE) : 0.055;
+
+    return {
+      u_res: [width, height],
+      u_center: [centerX, centerY],
+
+      aTop,   LTop,   w0Top,   w1Top,   pinchTop,   bendTop,
+      aRight, LRight, w0Right, w1Right, pinchRight, bendRight,
+      aLeft,  LLeft,  w0Left,  w1Left,  pinchLeft,  bendLeft,
+
+      colTop:   [1.00, 0.172, 0.765],  // #FF2CC3
+      colRight: [0.000, 0.780, 1.000], // #00C7FF
+      colLeft:  [0.478, 0.302, 1.000], // #7A4DFF
+
+      u_thresh, u_soft,
+
+      // Core bleibt gleich
+      coreStrength: 0.35,     // statt 0.42
+      coreR1: blob * 0.10,    // statt 0.13
+      coreR2: blob * 0.16,    // statt 0.20
+
+      // Orbit Offsets
+      offTop:   [oT.x, oT.y],
+      offRight: [oR.x, oR.y],
+      offLeft:  [oL.x, oL.y],
+
+      // Tilt pro Blob
+      sxTop: sxT, syTop: syT, shTop: shT,
+      sxRight: sxR, syRight: syR, shRight: shR,
+      sxLeft: sxL, syLeft: syL, shLeft: shL,
+
+      // Frontness-Bias
+      bTop: bT, bRight: bR, bLeft: bL,
+
+      // Feder/Dominanz unverändert (passt gut zu Siri)
+      tipStart: 0.74,
+      tipEnd: 0.992,
+      tipPow: 1.60,
+      domPow: 1.40,
+    };
+  }, [tCV, ampSmooth, width, height, centerX, centerY, ringRadius, orbitCV, topTiltCV, rightTiltCV, leftTiltCV, frontnessCV]);
+
+  // Debug-Logging entfernt für sauberen Siri-Look
+
+  // Legacy Path-basierte Blobs (für Fallback)
+  const topPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = topTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(-90) + 0.04 * Math.sin(t * 0.28 + 0.9);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.66 + 0.26 * amp + 0.008 * Math.sin(t * 0.30));
+    const w0 = blobScale * (0.16 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.36 + 0.20 * (1 - amp));
+    const pinch = 0.56 + 0.18 * amp + 0.01 * Math.sin(t * 0.40);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, topTiltCV]);
+
+  const rightPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = rightTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(30) + 0.04 * Math.sin(t * 0.30 + 2.1);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.68 + 0.24 * amp + 0.008 * Math.sin(t * 0.28 + 0.7));
+    const w0 = blobScale * (0.14 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.34 + 0.22 * (1 - amp));
+    const pinch = 0.56 + 0.17 * amp + 0.01 * Math.sin(t * 0.36 + 0.6);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, rightTiltCV]);
+
+  const leftPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = leftTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(210) + 0.04 * Math.sin(t * 0.29 + 4.2);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.67 + 0.25 * amp + 0.008 * Math.sin(t * 0.31 + 1.1));
+    const w0 = blobScale * (0.15 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.35 + 0.22 * (1 - amp));
+    const pinch = 0.57 + 0.17 * amp + 0.01 * Math.sin(t * 0.40 + 1.2);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, leftTiltCV]);
+
+  // Horizontaler Slice (fast-morphing ribbon crossing center)
+  const ribbonPath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(0) + 0.10 * Math.sin(t * 0.45);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.74 + 0.02 * Math.sin(t * 0.7));
+    const w0 = blobScale * (0.10 + 0.03 * fbm1D(t * 0.9, 771, 3));
+    const w1 = blobScale * (0.18 + 0.04 * fbm1D(t * 1.1, 773, 3));
+    const pinch = 0.72 + 0.05 * fbm1D(t * 0.6, 775, 3);
+    const bias = 0.02 * Math.sin(t * 0.9);
+    const bend = 0.24 * fbm1D(t * 0.8, 777, 3);
+    const phi1 = t * 3.2, phi2 = t * 5.1;  // Schneller als Blobs (3.2x, 5.1x vs max 1.6x)
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  // Drei individuelle Slice-Paths mit unterschiedlichen Charakteristika
+  const topSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(90) + 0.08 * Math.sin(t * 0.4);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.72 + 0.03 * Math.sin(t * 0.6));
+    const w0 = blobScale * (0.16 + 0.06 * fbm1D(t * 0.8, 801, 3));
+    const w1 = blobScale * (0.28 + 0.06 * fbm1D(t * 1.0, 803, 3));
+    const pinch = 0.74 + 0.04 * fbm1D(t * 0.5, 805, 3);     // Top: schlank, stark gepincht
+    const bias = 0.0;
+    const bend = 0.14 * fbm1D(t * 0.7, 807, 3);             // leicht positiv
+    const phi1 = t * 0.9, phi2 = t * 1.2;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  const rightSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(0) + 0.10 * Math.sin(t * 0.45);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.76 + 0.02 * Math.sin(t * 0.5));
+    const w0 = blobScale * (0.20 + 0.06 * fbm1D(t * 0.9, 811, 3));
+    const w1 = blobScale * (0.30 + 0.06 * fbm1D(t * 1.1, 813, 3));
+    const pinch = 0.59 + 0.03 * fbm1D(t * 0.4, 815, 3);     // Rechts: flacher, breiter
+    const bias = 0.035 * Math.sin(t * 0.8);                 // leicht positiv
+    const bend = 0.0;
+    const phi1 = t * 1.2, phi2 = t * 1.6;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  const leftSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(180) + 0.12 * Math.sin(t * 0.5);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.78 + 0.04 * Math.sin(t * 0.8));
+    const w0 = blobScale * (0.22 + 0.08 * fbm1D(t * 0.7, 821, 3));
+    const w1 = blobScale * (0.32 + 0.08 * fbm1D(t * 0.9, 823, 3));
+    const pinch = 0.62 + 0.04 * fbm1D(t * 0.6, 825, 3);     // Links: bauchiger
+    const bias = 0.0;
+    const bend = -0.15 * fbm1D(t * 0.6, 827, 3);            // leicht negativ
+    const phi1 = t * 1.05, phi2 = t * 1.45;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+  
+  // Vorherige neutrale Blob-Farbgebung (nur Intensität) deaktiviert beibehalten:
+  // false && (() => {
+  //   const neutralBlobColors = (_hex: string, aCore = blobAlpha) => ([
+  //     `rgba(245,250,255,${0.16 + 0.16 * ampSmooth})`,
+  //     `rgba(230,240,255,${0.08 + 0.10 * ampSmooth})`,
+  //     `rgba(255,255,255,${Math.max(0, aCore * 0.02)})`
+  //   ]);
+  //   return neutralBlobColors;
+  // })();
+  const colorizeOpacity = 0.88; // färbt neutrale Blobs mit Siri-Farben
+
+  // Refraction Rims (dünne, mitrotierende Kantenbänder)
+  const rimWidth = 0.012 + 0.012 * ampSmooth;
+  const rimAlphaCool = 0.26 + 0.42 * ampSmooth;
+  const rimAlphaWarm = 0.22 + 0.40 * ampSmooth;
+  const rimRadialPositions = useMemo(() => ([
+    1.0 - rimWidth * 1.25,
+    1.0 - rimWidth * 0.55,
+    1.0
+  ]), [rimWidth]);
+
           return (
-            <Group blendMode="screen">
-              <Path path={Skia.Path.Make().addCircle(cx, cy, R * BLOOM.edgeR)} opacity={BLOOM.edgeOp}>
-                <RadialGradient
-                  c={vec(cx, cy)}
-                  r={R * BLOOM.edgeR}
-                  colors={['#FFFFFF40', '#FFFFFF12', 'rgba(255,255,255,0)']}
-                  positions={[Math.min(0.999, 1 / BLOOM.edgeR), 0.92, 1.0]}
-                />
-              </Path>
-
-              {/* Vignette tie-in (leicht abdunkeln, multiplizieren) */}
-              <Group blendMode="multiply" opacity={BLOOM.vignette}>
-                <Path path={Skia.Path.Make().addCircle(centerX, centerY, R * 1.05)}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-                    r={R * 1.05}
-                    colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.25)']}
-                    positions={[0.78, 1.0]}
-                  />
-                </Path>
-              </Group>
-            </Group>
-          );
-        })()}
-        
-        {/* 2. Edge Rims and Refraction ring(s) with clamps */}
-        {/* Edge Refraction: kühler Saum (leicht nach außen) */}
-        {Math.min(RIM_CLAMP.opMax, rimOpacityPop * 1.08) >= 0.003 && (
-        <Path
-          path={circlePathOuter}
-          opacity={Math.min(RIM_CLAMP.opMax, rimOpacityPop * 1.08)}
-          blendMode="screen"
-        >
-          <SweepGradient
-            c={vec(centerX, centerY)}
-            colors={[
-              'rgba(255,255,255,0.00)',
-              `${REFR.hueCool}CC`,
-              'rgba(255,255,255,0.00)',
-            ]}
-            positions={[0.08, 0.16, 0.28]}
-            start={phaseRef.current}
-            end={phaseRef.current + Math.PI * 2}
-          />
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * (1.0 + REFR.width + rimShiftRef.current)}
-            colors={['rgba(255,255,255,0.0)', `${REFR.hueCool}CA`, 'rgba(255,255,255,0.0)']}
-            positions={[
-              Math.max(0, Math.min(1, 0.74)),
-              Math.max(0, Math.min(1, 0.90)),
-              Math.max(0, Math.min(1, 0.988)),
-            ]}
-          />
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * (1.0 + REFR.width + rimShiftRef.current * 1.15)}
-            colors={['rgba(255,255,255,0.0)', `${REFR.hueCool}AA`, 'rgba(255,255,255,0.0)']}
-            positions={[0.80, 0.92, 0.995]}
-          />
-        </Path>
-        )}
-
-        {/* Edge Refraction: warmer Gegen‑Saum (leicht nach innen) */}
-        {Math.min(RIM_CLAMP.opMax, rimOpacityPop * 0.90) >= 0.003 && (
-        <Path
-          path={circlePathInnerWarm}
-          opacity={Math.min(RIM_CLAMP.opMax, rimOpacityPop * 0.90)}
-          blendMode="screen"
-        >
-          <SweepGradient
-            c={vec(centerX, centerY)}
-            colors={[
-              'rgba(255,255,255,0.00)',
-              `${REFR.hueWarm}BB`,
-              'rgba(255,255,255,0.00)',
-            ]}
-            positions={[0.62, 0.70, 0.82]}
-            start={-phaseRef.current * 0.85}
-            end={-phaseRef.current * 0.85 + Math.PI * 2}
-          />
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * (1.0 - REFR.width*0.35 - rimShiftRef.current*0.8)}
-            colors={['rgba(255,255,255,0.0)', `${REFR.hueWarm}B1`, 'rgba(255,255,255,0.0)']}
-            positions={[
-              Math.max(0, Math.min(1, 0.60)),
-              Math.max(0, Math.min(1, 0.84)),
-              Math.max(0, Math.min(1, 0.988)),
-            ]}
-          />
-        </Path>
-        )}
-        
-        {/* 3. Specular Arc Sparkle (SPARC) */}
-        {(() => {
-          const R = mainRadius;
-          const env = Math.pow(clamp(sparkEnvRef.current, 0, 1), 0.9);
-          const n = SPARC.count;
-          const baseAng = arcAngle; // gleiche Lichtseite wie 2.9
-          const arcRad = (CAU.arcDeg * Math.PI) / 180;
-          const drift = phaseRef.current * 0.8;
-          return (
+    <View style={{ flex: 1, backgroundColor: isDarkMode ? '#0B1020' : '#0B1020' }}>
+      <Canvas style={{ width: '100%', height: '100%' }}>
+        {/* Orb-Vignette/Glas-Ränder (aktiviert, zart) */}
             <Group>
-              {Array.from({ length: n }, (_, i) => {
-                const span = arcRad * 0.75; // innerhalb des Arcs bleiben
-                const off = (-0.5 + (n === 1 ? 0.5 : i / (n - 1))) * span;
-                const wob = 0.12 * Math.sin(tRef.current * 0.6 + i * 1.7);
-                const ang = baseAng + off + wob;
-                const cx = centerX + Math.cos(ang) * R * SPARC.baseR;
-                const cy = centerY + Math.sin(ang) * R * SPARC.baseR;
-                const sR = R * SPARC.sizeR * (0.9 + 0.3 * env);
-                const op = SPARC.opMin + (SPARC.opMax - SPARC.opMin) * env * (0.9 + 0.1 * Math.sin(drift + i));
-                if (op < 0.003) return null;
-
-                return (
-                  <Path key={`spark-${i}`} path={Skia.Path.Make().addCircle(cx, cy, sR)} opacity={op}>
-                    <RadialGradient
-                      c={vec(cx, cy)}
-                      r={sR}
-                      colors={[`${SPARC.hue}F0`, 'rgba(255,255,255,0.0)']}
-                      positions={[0.0, 1.0]}
-                    />
-                  </Path>
-                );
-              })}
-            </Group>
-          );
-        })()}
-        
-        {/* 4. Micro Speck layer (SPECK) */}
-        {(() => {
-          const R = mainRadius;
-          const t = speckSeedRef.current;
-          const env = Math.pow(clamp(ampRef.current, 0, 1), 0.9);
-          const baseAng = arcAngle; // gleiche Lichtseite
-          const arcRad = (CAU.arcDeg * Math.PI) / 180;
-          const nodes = Array.from({ length: SPECK.count }, (_, i) => {
-            const u = (i + 1.7) / (SPECK.count + 2);
-            const ang = baseAng - arcRad * 0.35 + u * arcRad * 0.7
-              + SPECK.swirl * 0.12 * Math.sin(t * 0.7 + i * 1.9);
-            const rr = SPECK.rMin + (SPECK.rMax - SPECK.rMin) *
-              (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * SPECK.drift + i)));
-            const rad = R * rr;
-            const cx = centerX + Math.cos(ang) * rad;
-            const cy = centerY + Math.sin(ang) * rad;
-            const s = R * (SPECK.size[0] + (SPECK.size[1] - SPECK.size[0]) * (0.3 + 0.7 * env));
-            const boost = 1 + (twinkleBufRef.current[i] || 0);
-            const op = Math.min(
-              SPECK.opMin + (SPECK.opMax - SPECK.opMin) * env * (0.8 + 0.2 * Math.sin(t + i)) * boost,
-              RIM_CLAMP.opMax
-            );
-            return { cx, cy, s, op };
-          });
-
-          return (
-            <Group>
-              {nodes.filter(p => p.op >= 0.003).map((p, i) => (
-                <Path key={`spk-${i}`} path={Skia.Path.Make().addCircle(p.cx, p.cy, p.s)} opacity={p.op}>
+          <Circle cx={centerX} cy={centerY} r={ringRadius}>
                   <RadialGradient
-                    c={vec(p.cx, p.cy)}
-                    r={p.s}
-                    colors={['#FFFFFFE0', 'rgba(255,255,255,0)']}
-                    positions={[0.0, 1.0]}
-                  />
-                </Path>
-              ))}
-            </Group>
-          );
-        })()}
-        
-        {/* 5. Inner Ripple Interference (RIP) */}
-        {(() => {
-          const R = mainRadius * 0.88; // etwas innerhalb
-          const cx = centerX, cy = centerY;
-          const env = clamp(coreEnvRef.current, 0, 1); // warm/cool crossfade
-          const op = RIP.op * (0.9 + 0.1 * ampRef.current);
-          if (op < 0.003) return null;
-          // choose colors
-          const cA = RIP.hueCool;
-          const cB = RIP.hueWarm;
-
-          // build a radial function texture via SweepGradient trick
-          const t = ripplePhaseRef.current;
-          const ang0 = t * RIP.swirl;
-
-          // colors array (positions are memoized)
-          const colors: string[] = new Array(RIP_SWEEP_POS.length);
-          for (let i = 0; i < RIP_SWEEP_POS.length; i++) {
-            const u = RIP_SWEEP_POS[i]; // 0..1 around the circle
-            const theta = ang0 + u * Math.PI * 2;
-            // multi-sine interference
-            const s =
-              Math.sin(theta * RIP.freq[0]) +
-              Math.sin(theta * RIP.freq[1] + 1.1) +
-              Math.sin(theta * RIP.freq[2] + 2.3);
-            // normalize to 0..1
-            const n = 0.5 + 0.5 * (s / 3.0);
-            // mix warm/cool per crossfade
-            const col = env < 0.5 ? cA : cB;
-            const a = op * (0.35 + 0.65 * n);
-            colors[i] = `${col}${toHexA(a)}`;
-          }
-
-          const rIn = mainRadius * CORE.rInner * corePulseRef.current;
-          const rOut = R;
-
-          return (
-            <Path path={Skia.Path.Make().addCircle(cx, cy, rOut)}>
-              <RadialGradient
-                c={vec(cx, cy)}
-                r={rOut}
-                colors={[`${cA}00`, `${cA}00`, `${cA}00`]}
-                positions={[0, 0.001, 0.002]}
-              />
-              <SweepGradient
-                c={vec(cx, cy)}
-                colors={colors}
-                positions={RIP_SWEEP_POS}
-                transform={[{ rotate: ang0 }]}
-              />
-              <RadialGradient
-                c={vec(cx, cy)}
-                r={rOut}
+              c={vec(centerX, centerY)} r={ringRadius}
             colors={[
-                  'rgba(0,0,0,0)',
-                  `rgba(0,0,0,${0.6 * RIP.amp})`,
-                  'rgba(0,0,0,0)'
-                ]}
-                positions={[Math.max(0, Math.min(1, rIn / rOut)), Math.max(0, Math.min(1, Math.pow(rIn / rOut, 0.55))), 1.0]}
-          />
-        </Path>
-          );
-        })()}
-        
-        {/* 6. Core Caustic Crossfade (CORE) */}
-        {(() => {
-          const R = mainRadius;
-          const rIn = R * CORE.rInner * corePulseRef.current;
-          const rOut = R * CORE.rOuter;
-          const fade = clamp(coreEnvRef.current, 0, 1);
-          // opacities für warm/cool
-          const opCool = CORE.opMax * (1 - fade);
-          const opWarm = CORE.opMax * fade;
-          if (opCool < 0.003 && opWarm < 0.003) return null;
-
-          // Körnung minimal über Positions‑Noise
-          const g = CORE.grain;
-          const cx = centerX + g * Math.sin(phaseRef.current * 1.1) * 2.0;
-          const cy = centerY + g * Math.cos(phaseRef.current * 0.9) * 2.0;
-
-          return (
-            <Group>
-              {/* Cool core */}
-              <Path path={Skia.Path.Make().addCircle(cx, cy, rOut)} opacity={opCool}>
-                <RadialGradient
-                  c={vec(cx, cy)}
-                  r={rOut}
-                  colors={[`${CORE.cool}F0`, `${CORE.cool}80`, 'rgba(0,0,0,0)']}
-                  positions={[Math.max(0, Math.min(1, rIn / rOut)), Math.max(0, Math.min(1, mix(rIn / rOut, 0.72, 0.6))), 1.0]}
-                />
-              </Path>
-
-              {/* Warm overlay */}
-              <Path path={Skia.Path.Make().addCircle(cx, cy, rOut)} opacity={opWarm}>
-                <RadialGradient
-                  c={vec(cx, cy)}
-                  r={rOut}
-                  colors={[`${CORE.warm}E6`, `${CORE.warm}66`, 'rgba(0,0,0,0)']}
-                  positions={[Math.max(0, Math.min(1, rIn / rOut)), Math.max(0, Math.min(1, mix(rIn / rOut, 0.68, 0.6))), 1.0]}
-                />
-              </Path>
-            </Group>
-          );
-        })()}
-        
-        {/* 7. Base center glow/background */}
-        <Circle cx={centerX} cy={centerY} r={mainRadius * 0.982}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius}
-            colors={[
-              'rgba(255,255,255,0.00)',
-              'rgba(210,230,255,0.040)',
-              'rgba(120,150,200,0.060)',
-              'rgba(0,0,0,0.00)',
-            ]}
-            positions={[0.00, 0.86, 0.95, 1.00]}
+                'rgba(16,20,30,0.16)', // center: zart
+                'rgba(12,16,24,0.30)',
+                'rgba(8,10,16,0.00)'
+              ]}
+              positions={[0.00, 0.82, 1.00]}
           />
         </Circle>
 
-        {/* 2.5: Subtle Outer Halo (screen, neutral, groß) */}
-        {(() => {
-          const k = clamp(0.40 * haloPhase + 0.60 * clamp(ampRef.current, 0, 1), 0, 1);
-          const fpsK = (0.9 + 0.2 * Math.min(1, 1 / (60 * (dtEmaRef.current || 1))));
-          const op = (0.010 + 0.017 * k) * fpsK;     // minimal weniger Peak
-          if (op < 0.003) return null;
-          const r  = mainRadius * (1.72 + 0.30 * k); // 1.72R..2.02R
-          return (
-            <Path
-              path={Skia.Path.Make().addRect(Skia.XYWHRect(0, 0, width, height))}
-              blendMode="screen"
-              opacity={op}
-            >
+          <Circle cx={centerX} cy={centerY} r={ringRadius * 1.10}>
           <RadialGradient
-            c={vec(centerX, centerY)}
-                r={r}
+              c={vec(centerX, centerY)} r={ringRadius * 1.10}
             colors={[
-                  'rgba(240,246,255,0.030)', // sehr neutral, leicht kühl
-                  'rgba(210,230,255,0.012)',
-                  'rgba(0,0,0,0.00)',
-                ]}
-                positions={[0.00, 0.58, 1.00]}
-          />
-        </Path>
-          );
-        })()}
-
-        {/* 1) Glass Core – Schritt 2.2 (2 Layer) */}
-        {blobDataArray.map((b)=>(
-          (() => {
-            // Hotspot-Position: leicht nach oben links kippen (wie ein Licht)
-            const hsx = centerX + Math.cos(-Math.PI/2 + SPEC.tilt) * b.finalRadius * 0.08;
-            const hsy = centerY + Math.sin(-Math.PI/2 + SPEC.tilt) * b.finalRadius * 0.08;
-
-            // Größe moduliert minimal mit breath (optional)
-            const size = b.finalRadius * SPEC.sizeR * (1.0 + 0.03 * breathEnvRef.current);
-
-            // Opacity map
-            const baseOp = SPEC.minOp;
-            const peakOp = SPEC.maxOp;
-            const specOp = baseOp + (peakOp - baseOp) * Math.pow(specEnvRef.current, 0.9);
-
-            // Bloom-Komponente etwas stärker bei Peaks
-            const bloomOp = specOp * 0.48 * SPEC.bloomMul;
-
-            return (
-          <Group key={`fill-${b.blobId}`}>
-            {/* Core cool */}
-            <Path path={b.path} opacity={1}>
-              <RadialGradient
-                c={vec(b.adjustedX, b.adjustedY)}
-                r={b.finalRadius}
-                colors={[
-                  'rgba(210,230,255,0.92)',
-                  'rgba(150,200,255,0.42)',
-                  'rgba(150,200,255,0.00)',
-                ]}
-                positions={[0.00, 0.22, 1.00]}
-              />
-            </Path>
-
-            {/* Inner shadow (gegen Lichtquelle), multiply 0.35 */}
-            <Path path={b.path} blendMode="multiply" opacity={0.22}>
-              <RadialGradient
-                c={vec(
-                  b.adjustedX - lightDir.x * b.finalRadius * 0.26,
-                  b.adjustedY - lightDir.y * b.finalRadius * 0.26
-                )}
-                r={b.finalRadius * 1.10}
-                colors={[
-                  'rgba(0,0,0,0.06)',
-                  'rgba(0,0,0,0.02)',
-                  'rgba(0,0,0,0.00)',
-                ]}
-                positions={[0.00, 0.90, 1.00]}
-              />
-            </Path>
-
-            {/* 2.3: Specular microrim (Screen, pulsiert mit Breath) */}
-            {(() => {
-              const k = breathEnvRef.current; // 0..1
-              // Opacity 0.018 → 0.036
-              const op = 0.018 + k * 0.018;
-              // Fokus enger bei Peak: positions eng zusammenrücken
-              const posMid = 0.972 + k * 0.006;  // 0.972..0.978
-              const posEnd = 0.994 + k * 0.004;  // 0.994..0.998
-              const rc = b.finalRadius * 0.82;   // noch kompakter
-              return (
-                <Path key={`spec-rim-${b.blobId}`} path={b.path} blendMode="screen" opacity={op}>
-                  <RadialGradient
-                    c={vec(
-                      b.adjustedX + lightDir.x * b.finalRadius * 0.32,
-                      b.adjustedY + lightDir.y * b.finalRadius * 0.32
-                    )}
-                    r={rc}
-                    colors={[
-                      'rgba(255,255,255,0.00)',
-                      'rgba(255,255,255,0.12)',
-                      'rgba(255,255,255,0.00)',
-                    ]}
-                    positions={[
-                      Math.max(0, Math.min(1, posMid - 0.047)),
-                      Math.max(0, Math.min(1, posMid)),
-                      Math.max(0, Math.min(1, Math.max(posMid, posEnd)))
-                    ]}
-                  />
-                </Path>
-              );
-            })()}
-
-            {/* Sehr kleine Funken, die bei specStrength > 0.7 auftauchen, drehen langsam */}
-            {specEnvRef.current > 0.7 && [0,1].map(i => {
-              const ang = (tRef.current * 0.6 + i * 2.1);
-              const rr = size * (1.1 + 0.25 * i);
-              const sx = hsx + Math.cos(ang) * rr;
-              const sy = hsy + Math.sin(ang) * rr;
-              const sSize = size * (0.28 - 0.06*i);
-              const sOp = (specEnvRef.current - 0.7) * (0.6 - 0.2*i);
-              return (
-                <Path
-                  key={`spark-${i}`}
-                  path={Skia.Path.Make().addCircle(sx, sy, sSize)}
-                  opacity={sOp}
-                  blendMode="screen"
-                >
-                  <RadialGradient
-                    c={vec(sx, sy)}
-                    r={sSize}
-                    colors={['rgba(255,255,255,0.9)','rgba(255,255,255,0.0)']}
-                    positions={[0.0, 0.9]}
-                  />
-                </Path>
-              );
-            })}
-          </Group>
-            );
-          })()
-        ))}
-
-        {/* 2.3: Breathing Core Glow (Screen) */}
-        {blobDataArray.map((b) => {
-          const k = breathEnvRef.current; // 0..1 eased
-          // Opacity fährt 0.028 → 0.060; Radius 0.14R → 0.20R
-          const op = 0.028 + k * 0.032;
-          if (op < 0.003) return null;
-          const rg = b.finalRadius * (0.14 + k * 0.06);
-          return (
-            <Path key={`breath-glow-${b.blobId}`} path={Skia.Path.Make().addCircle(b.adjustedX, b.adjustedY, rg)} blendMode="screen" opacity={op}>
-              <RadialGradient
-                c={vec(b.adjustedX, b.adjustedY)}
-                r={rg}
-                colors={[
-                  'rgba(180,220,255,0.24)',  // zarte kühle Mitte
-                  'rgba(180,220,255,0.06)',
-                  'rgba(180,220,255,0.00)',
-                ]}
-                positions={[0.00, 0.54, 1.00]}
-              />
-            </Path>
-          );
-        })}
-
-        {/* 2) Farbige Kante nur entlang des Blob-Pfades (Screen) - niedrige Opacity */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen">
-          {blobDataArray.map((b) => (
-            <Path key={`sweep-${b.blobId}`} path={b.path} opacity={0.025}>
-              <SweepGradient
-                c={vec(b.adjustedX, b.adjustedY)}
-                colors={[
-                  '#25D6FF', // Cyan
-                  '#5BE2FF', // Teal/Azure
-                  '#7C72FF', // Indigo/Violet
-                  '#FF6CDA', // Magenta
-                  '#FF8C66', // Peach/Crimson
-                  '#25D6FF',
-                ]}
-                positions={[0.00, 0.18, 0.42, 0.66, 0.88, 1.00]}
-              />
-            </Path>
-          ))}
-        </Group>
-        )}
-
-        {/* 3) Weißer Rim (Screen) - sehr niedrige Opacity */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen">
-          {blobDataArray.map((b)=>(
-            <Path key={`rim-${b.blobId}`} path={b.path} opacity={0.06}>
-              <RadialGradient
-                c={vec(b.adjustedX + lightDir.x * b.finalRadius * 0.20, b.adjustedY + lightDir.y * b.finalRadius * 0.20)}
-                r={b.finalRadius}
-                colors={['rgba(255,255,255,0.00)','rgba(255,255,255,0.06)','rgba(255,255,255,0.00)']}
-                positions={[0.86,0.94,1.00]}
-              />
-            </Path>
-          ))}
-        </Group>
-        )}
-
-        {/* 4) Farbiger Rim (Screen) - sehr niedrige Opacity */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen">
-          {blobDataArray.map((b)=>(
-            <Path key={`rimcolor-${b.blobId}`} path={b.path} opacity={0.022}>
-              <SweepGradient
-                c={vec(b.adjustedX, b.adjustedY)}
-                colors={['#25D6FF','#5BE2FF','#7C72FF','#FF6CDA','#FF8C66','#25D6FF']}
-                positions={[0.00,0.20,0.44,0.68,0.90,1.00]}
-              />
-            </Path>
-          ))}
-        </Group>
-        )}
-        
-        {/* Siri-Rainbow um den Hauptkreis */}
-        {!BASELINE_22 && (
-        <Group origin={vec(centerX, centerY)} transform={[{ rotate: rotRef.current }]}>
-          <Path
-            path={Skia.Path.Make().addCircle(centerX, centerY, mainRadius * 0.994)}
-            blendMode="screen"
-            opacity={0.115}
-          >
-            <SweepGradient
-              c={vec(centerX, centerY)}
-              colors={[
-                '#12CCFF', // etwas satteres Cyan
-                '#4FD9FF', // Azure
-                '#6A62FF', // Indigo
-                '#FF5FD2', // Magenta
-                '#FF8659', // Peach/Crimson
-                '#12CCFF',
+                'rgba(8,12,20,0.14)',
+                'rgba(4,6,12,0.24)'
               ]}
-              positions={[0.00, 0.18, 0.42, 0.66, 0.88, 1.00]}
+              positions={[0.00, 1.00]}
             />
-          </Path>
-        </Group>
-        )}
-
-        {/* Weißer Außen-Rim - schmaler und weicher */}
-        {!BASELINE_22 && (
-        <Path path={Skia.Path.Make().addCircle(centerX, centerY, mainRadius * 0.9965)} blendMode="screen" opacity={0.048}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius}
-            colors={[
-              'rgba(255,255,255,0.00)',
-              'rgba(255,255,255,0.14)',
-              'rgba(255,255,255,0.00)',
-            ]}
-            positions={[0.918, 0.974, 1.00]}
-          />
-        </Path>
-        )}
-        
-        {/* 6. Petals – 3 farbige Lappen (Screen) */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen">
-          {[
-            { hue: '#25D6FF', rot: 0.00, pos: [0.00, 0.55, 1.00], op: 0.050 }, // Cyan
-            { hue: '#7C72FF', rot: 2.10, pos: [0.00, 0.55, 1.00], op: 0.045 }, // Indigo/Violet
-            { hue: '#FF6CDA', rot: 4.10, pos: [0.00, 0.55, 1.00], op: 0.040 }, // Magenta
-          ].map((p, i) => {
-            const rPetal = mainRadius * 0.58;
-            const path = makeBlobPath2D(centerX, centerY, rPetal, tRef.current + i * 0.7, i * 0.37, p.rot, shapeRefs, i+10);
-            return (
-              <Path key={`petal-${i}`} path={path} opacity={p.op}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-                  r={rPetal}
-                  colors={[
-                    'rgba(255,255,255,0.00)',
-                    'rgba(255,255,255,0.00)',
-                    'rgba(255,255,255,0.00)',
-                  ]}
-                  positions={p.pos}
-                />
-                <SweepGradient
-                  c={vec(centerX, centerY)}
-                  colors={[p.hue, '#5BE2FF', '#7C72FF', '#FF6CDA', '#FF8C66', p.hue]}
-                  positions={[0.00, 0.22, 0.46, 0.70, 0.90, 1.00]}
-          />
-        </Path>
-            );
-          })}
-        </Group>
-        )}
-
-        {/* 6c. Petal Edge Rim (weiß, schmal) */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen">
-          {[0,1,2].map((i) => {
-            const r = mainRadius * 0.58;
-            const p = makeBlobPath2D(centerX, centerY, r, tRef.current + i * 0.7, i * 0.37, 0.0, shapeRefs, i+20);
-            return (
-              <Path key={`petal-rim-${i}`} path={p} opacity={0.030}>
-                <RadialGradient
-                  c={vec(centerX + lightDir.x * r * 0.16, centerY + lightDir.y * r * 0.16)}
-                  r={r}
-                  colors={['rgba(255,255,255,0.00)','rgba(255,255,255,0.08)','rgba(255,255,255,0.00)']}
-                  positions={[0.86, 0.94, 1.00]}
-                />
-              </Path>
-            );
-          })}
-        </Group>
-        )}
-
-        {/* 6b. Caustic Overlaps – schmale additive Glows */}
-        {!BASELINE_22 && (
-        <Group blendMode="screen" opacity={0.055}>
-          {[0,1,2].map((i) => {
-            const r = mainRadius * 0.60;
-            const off = 0.22 + i * 0.06;
-            return (
-              <Path key={`caustic-${i}`} path={Skia.Path.Make().addCircle(
-                centerX + lightDir.x * r * off,
-                centerY + lightDir.y * r * off,
-                r * 0.32
-              )}>
-                <RadialGradient
-                  c={vec(centerX + lightDir.x * r * off, centerY + lightDir.y * r * off)}
-                  r={r * 0.32}
-                  colors={[
-                    'rgba(255,255,255,0.10)',
-                    'rgba(255,255,255,0.04)',
-                    'rgba(255,255,255,0.00)',
-                  ]}
-                  positions={[0.00, 0.58, 1.00]}
-                />
-              </Path>
-            );
-          })}
-        </Group>
-        )}
-
-        {/* 
-        <Path path={Skia.Path.Make().addRect(Skia.XYWHRect(0, 0, width, height))} blendMode="screen" opacity={0.012}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * 1.45}
-            colors={[
-              'rgba(235,245,255,0.055)',
-              'rgba(170,215,255,0.032)',
-              'rgba(160,90,210,0.025)',
-              'rgba(0,0,0,0.00)'
-            ]}
-            positions={[0.00, 0.52, 0.86, 1.00]}
-          />
-        </Path>
-        */}
-
-
-        {/* 2.3: Center Bloom (leicht atmend) */}
-        {!BASELINE_22 && (() => {
-          const k = breathEnvRef.current; // 0..1
-          const op = 0.0025 + k * 0.002;  // 0.0025..0.0045
-          const rr = mainRadius * (1.06 + 0.03 * k);
-          return (
-            <Path path={Skia.Path.Make().addRect(Skia.XYWHRect(0,0,width,height))} blendMode="screen" opacity={op}>
-              <RadialGradient
-                c={vec(centerX, centerY)}
-                r={rr}
-                colors={[
-                  'rgba(235,245,255,0.026)',
-                  'rgba(170,215,255,0.012)',
-                  'rgba(0,0,0,0.00)'
-                ]}
-                positions={[0.00, 0.58, 1.00]}
-              />
-            </Path>
-          );
-        })()}
-
-        {/* 2.4: Edge Color Whisper (ultraleise, segmentiert) */}
-        {BASELINE_24 && (
-          <Group blendMode="screen" opacity={1}>
-            {blobDataArray.map((b) => {
-              const k = breathEnvRef.current; // 0..1
-              // globale Atemsteuerung für Opacity
-              const opBase = 0.006;      // Minimum
-              const opSpan = 0.012 * (0.9 + 0.2 * Math.min(1, 1 / (60 * dtEmaRef.current || 1)));
-              const op = opBase + opSpan * k;
-
-              // Randradius leicht kleiner als Außenkante -> verhindert Übersprechen
-              const r = b.finalRadius * 0.985;
-
-              // Positions eng am Rand
-              const pInner = 0.968;
-              const pMid   = 0.980 + 0.004 * k; // 0.980..0.984
-              const pOuter = 0.995;
-
-              // Segmentbreite (Bogen) ~30°; Skia liefert keinen Winkel-Clip für Gradients direkt.
-              // Workaround: wir verwenden je Segment einen schmalen lokal rotierten Blob-Pfad als "Maske" (ein dünner Torus-Sektor).
-              const mkSectorPath = (angle: number, arcDeg = 30) => {
-                const arc = (arcDeg * Math.PI) / 180;
-                const steps = 32;
-                const innerR = b.finalRadius * 0.955;
-                const outerR = b.finalRadius * 1.010;
-                const cx = b.adjustedX, cy = b.adjustedY;
-
-                const path = Skia.Path.Make();
-                // Außenbogen
-                for (let i = 0; i <= steps; i++) {
-                  const a = angle - arc/2 + (i/steps) * arc;
-                  const x = cx + outerR * Math.cos(a);
-                  const y = cy + outerR * Math.sin(a);
-                  if (i === 0) path.moveTo(x, y); else path.lineTo(x, y);
-                }
-                // Innenbogen zurück
-                for (let i = steps; i >= 0; i--) {
-                  const a = angle - arc/2 + (i/steps) * arc;
-                  const x = cx + innerR * Math.cos(a);
-                  const y = cy + innerR * Math.sin(a);
-                  path.lineTo(x, y);
-                }
-                path.close();
-                return path;
-              };
-
-              // Segment-Definitionen: Farben sehr zart
-              const segments = [
-                {
-                  key: 'whisper-cyan',
-                  angle: rimAngles.cyan,
-                  colors: ['rgba(37,214,255,0.00)','rgba(37,214,255,0.18)','rgba(37,214,255,0.00)'],
-                },
-                {
-                  key: 'whisper-violet',
-                  angle: rimAngles.violet,
-                  colors: ['rgba(124,114,255,0.00)','rgba(124,114,255,0.18)','rgba(124,114,255,0.00)'],
-                },
-                {
-                  key: 'whisper-magenta',
-                  angle: rimAngles.magenta,
-                  colors: ['rgba(255,108,218,0.00)','rgba(255,108,218,0.14)','rgba(255,108,218,0.00)'],
-                },
-              ];
-
-              return (
-                <Group key={`whisper-wrap-${b.blobId}`} opacity={1}>
-                  {segments.map((seg) => {
-                    const sector = mkSectorPath(seg.angle, 32); // 32° Segment
-                    return (
-                      <Path key={`${seg.key}-${b.blobId}`} path={sector} opacity={op}>
-                        <RadialGradient
-                          c={vec(b.adjustedX, b.adjustedY)}
-                          r={r}
-                          colors={seg.colors}
-                          positions={[pInner, pMid, pOuter]}
-                        />
-                      </Path>
-                    );
-                  })}
-                </Group>
-              );
-            })}
+          </Circle>
           </Group>
-        )}
 
+        {/* Nur Shader, additiv, im Kreis-Clip */}
+        <Group
+          clip={orbClip}
+          blendMode="plus"
+          opacity={1}
+          transform={DEFAULT_STATE ? undefined : sceneBreathTransform}
+          layer
+        >
+          <Fill>
+            <Shader source={metaPetalFx} uniforms={uniformsCV} />
+          </Fill>
+        </Group>
 
-        {/* 2.9: Chromatic Edge Caustics */}
-        {(() => {
-          const R = mainRadius;
-          const env = Math.min(1, amplitude / 100);
-          const phiJ = 0.12 * Math.sin(tRef.current * 0.8);
-          const sectorScroll = 0.10 * tRef.current; // rad/s very slow
-          const angleNow = arcAngle + sectorScroll;
-          const sector = makeArcSector(centerX, centerY, R * 0.92, R * (1.0 + REFR.width * 1.40), angleNow, CAU.arcDeg);
-          // Nonlinear arc speed with easing
-          const raw = (phaseRef.current || 0) * (CAU_SPEED / (REFR.speed || 1));
-          const u = 0.5 - 0.5 * Math.cos(2 * Math.PI * raw); // smooth cycle 0..1
-          const eased = Math.pow(u, MOT.arcEase) / (Math.pow(u, MOT.arcEase) + Math.pow(1 - u, MOT.arcEase));
-          const arcPhase = eased * 2 * Math.PI;
-          
-          // safety cap (optional)
-          const cap = (v:number, m:number) => Math.min(m, v);
-          
-          const coolOp = cap(CAU.coolOp * (0.85 + 0.30*env), RIM_CLAMP.arcCoolMax);
-          const warmOp = cap(CAU.warmOp * (0.85 + 0.28*env), RIM_CLAMP.arcWarmMax);
-          
-          if (coolOp < 0.003 && warmOp < 0.003) return null;
-          
-          return (
-            <Group>
-              {/* Cold outer arc */}
-              {coolOp >= 0.003 && (
-              <Path path={sector} opacity={coolOp}>
-                <SweepGradient
-                  c={vec(centerX, centerY)}
-                  colors={['rgba(0,0,0,0.00)', `${CAU.coolHue}D0`, 'rgba(0,0,0,0.00)']}
-                  positions={CAU.sweepTightC}
-                  start={arcPhase + phiJ}
-                  end={arcPhase + phiJ + Math.PI * 2}
-                />
-                <RadialGradient
-                  c={vec(centerX, centerY)}
-                  r={R * (1.0 + REFR.width + rimShiftRef.current)}
-                  colors={['rgba(0,0,0,0.00)', `${CAU.coolHue}C0`, 'rgba(0,0,0,0.00)']}
-                  positions={CAU.radialTightCool}
-                />
-              </Path>
-              )}
-
-              {/* Warm inner arc */}
-              {warmOp >= 0.003 && (
-              <Path path={sector} opacity={warmOp}>
-                <SweepGradient
-                  c={vec(centerX, centerY)}
-                  colors={['rgba(0,0,0,0.00)', `${CAU.warmHue}BB`, 'rgba(0,0,0,0.00)']}
-                  positions={CAU.sweepTightW}
-                  start={-arcPhase * 0.9 - phiJ}
-                  end={-arcPhase * 0.9 - phiJ + Math.PI * 2}
-                />
-                <RadialGradient
-                  c={vec(centerX, centerY)}
-                  r={R * (1.0 - REFR.width * 0.25 - rimShiftRef.current * 0.6)}
-                  colors={['rgba(0,0,0,0.00)', `${CAU.warmHue}B0`, 'rgba(0,0,0,0.00)']}
-                  positions={CAU.radialTightWarm}
-                />
-              </Path>
-              )}
-
-              {/* micro bloom */}
-              {CAU.bloom >= 0.003 && (
-              <Path path={sector} opacity={CAU.bloom}>
-                <RadialGradient
-                  c={vec(centerX, centerY)}
-                  r={R * (1.05 + 0.02 * breathEnvRef.current)}
-                  colors={['rgba(255,255,255,0.00)', 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.00)']}
-                  positions={[0.78, 0.90, 0.995]}
-                />
-              </Path>
-              )}
-            </Group>
-          );
-        })()}
-
-
-        {/* 2.6: Outer Amplitude Ripples (screen) */}
-        {(() => {
-          const { a, k } = rippleEnv;
-          // Gesamt-Opacity skaliert mit Amplitude; sehr vorsichtig
-          const baseOp = 0.008 * (0.9 + 0.2 * Math.min(1, 1 / (60*(dtEmaRef.current||1))));
-          const op = baseOp + a * 0.032; // etwas reaktiver
-          if (op < 0.003) return null;
-          // Grundradius etwas innen, damit es am Rand „entsteht"
-          const R = mainRadius * 0.985;
-          // Wellenparameter
-          const waves = 3;                    // 2–3 flache Wellen
-          const spread = 0.022 + 0.016 * k;   // Bandbreite (breath)
-          const speed = 2.2;                  // testweise schneller
-          const phase = tRef.current * speed;
-
-          // Wir zeichnen mehrere schmale konzentrische Bänder mit verschobenem Peak
-          const bands = Array.from({ length: waves }, (_, i) => {
-            const u = i / (waves - 1 || 1);
-            const center = 0.965 + u * 0.030;         // 0.965..0.995
-            const shift = 0.022 * Math.sin(phase + i * 1.9); // testweise größere Bewegung
-            // Mini-Noise gegen Banding
-            const n = 0.5 * (Math.sin(17.0*i + 29.0*phase) + Math.sin(13.0*i + 23.0*phase+1.7));
-            const opJitter = 1.0 + 0.06 * n;
-            const opFinal = op * (0.85 - 0.35 * u) * opJitter;
-            
-            return {
-              inner: Math.max(0.90, center - spread * 0.5 + shift),
-              mid:   Math.min(0.999, center + shift),
-              outer: Math.min(1.00, center + spread * 0.5 + shift),
-              opacity: opFinal        // outermost am stärksten
-            };
-          });
-
-          const sweep = (idx:number) => (
-            <Path
-              key={`ripple-sweep-${idx}`}
-              path={Skia.Path.Make().addCircle(centerX, centerY, R * (1.0 + 0.006 * idx))}
-              opacity={op * (0.35 + 0.25 * idx)}
-              blendMode="screen"
-            >
-              <SweepGradient
-                c={vec(centerX, centerY)}
-                colors={[
-                  'rgba(255,255,255,0.00)',
+        {/* Glas-Rand: dezente Top-Left-Aufhellung, kein rotierender Farb-Ring */}
+        {DEFAULT_STATE ? (
+          <Group>
+            {/* zarter weißer Glint oben-links */}
+            <Circle cx={centerX} cy={centerY} r={ringRadius * 1.06}>
+                  <RadialGradient
+                c={vec(centerX - ringRadius * 0.36, centerY - ringRadius * 0.46)}
+                r={ringRadius * 1.10}
+                    colors={[
                   'rgba(255,255,255,0.08)',
+                      'rgba(255,255,255,0.00)',
                   'rgba(255,255,255,0.00)'
                 ]}
-                positions={[0.00, 0.14, 0.28]}
+                positions={[0.0, 0.12, 1.0]}
               />
-            </Path>
-          );
+            </Circle>
 
-          return (
-            <Group blendMode="screen" opacity={1}>
-              {bands.map((bnd, idx) => (
-                <Path key={`ripple-${idx}`}
-                      path={Skia.Path.Make().addCircle(centerX, centerY, R)}
-                      opacity={bnd.opacity}>
+            {/* feiner innerer Glanz direkt am Rand */}
+            <Circle cx={centerX} cy={centerY} r={ringRadius * 0.998}>
                   <RadialGradient
                     c={vec(centerX, centerY)}
-                    r={R * (1.012 + 0.012 * idx) * (1.0 + 0.005 * k)}
+                r={ringRadius}
                     colors={[
+                  'rgba(255,255,255,0.02)',
+                  'rgba(255,255,255,0.10)',
+                  'rgba(255,255,255,0.00)'
+                ]}
+                positions={[0.90, 0.97, 1.0]}
+              />
+            </Circle>
+          </Group>
+        ) : (
+          <Group transform={sceneBreathTransform}>
+            {/* zarter weißer Glint oben-links */}
+            <Circle cx={centerX} cy={centerY} r={ringRadius * 1.06}>
+                  <RadialGradient
+                c={vec(centerX - ringRadius * 0.36, centerY - ringRadius * 0.46)}
+                r={ringRadius * 1.10}
+                    colors={[
+                  'rgba(255,255,255,0.08)',
                       'rgba(255,255,255,0.00)',
-                      'rgba(255,255,255,0.09)',
-                      'rgba(255,255,255,0.00)',
-                    ]}
-                    positions={[
-                      Math.max(0, Math.min(1, Math.min(bnd.inner, bnd.mid, bnd.outer))),
-                      Math.max(0, Math.min(1, bnd.mid)),
-                      Math.max(0, Math.min(1, Math.max(bnd.inner, bnd.mid, bnd.outer)))
-                    ]}
-                  />
-                </Path>
-              ))}
-              {[0,1].map(i => sweep(i))}
-            </Group>
-          );
-        })()}
+                  'rgba(255,255,255,0.00)'
+                ]}
+                positions={[0.0, 0.12, 1.0]}
+              />
+            </Circle>
 
-
-        {/* Farbige Rim-Reflex auf Lichtseite */}
-        {!BASELINE_22 && (
-        <Path
-          path={Skia.Path.Make().addCircle(centerX, centerY, mainRadius * 0.996)}
-          blendMode="screen"
-          opacity={0.025}
-        >
-          <SweepGradient
-            c={vec(centerX, centerY)}
-            colors={[
-              'rgba(255,255,255,0.00)', // Start: unsichtbar
-              '#FFE1C9',                // warmes Highlight
-              '#C9F1FF',                // kühler Übergang
-              'rgba(255,255,255,0.00)', // Ende: ausblenden
-            ]}
-            positions={[0.00, 0.08, 0.16, 0.22]}
-          />
-        </Path>
+            {/* feiner innerer Glanz direkt am Rand */}
+            <Circle cx={centerX} cy={centerY} r={ringRadius * 0.998}>
+                  <RadialGradient
+                    c={vec(centerX, centerY)}
+                r={ringRadius}
+                    colors={[
+                  'rgba(255,255,255,0.02)',
+                  'rgba(255,255,255,0.10)',
+                  'rgba(255,255,255,0.00)'
+                ]}
+                positions={[0.90, 0.97, 1.0]}
+              />
+            </Circle>
+          </Group>
         )}
 
-
-        {/* Lokaler Core-Glow */}
-        {0.075 >= 0.003 && (
-        <Path path={Skia.Path.Make().addCircle(centerX, centerY, mainRadius * 0.16)} blendMode="screen" opacity={0.075}>
+        {/* Fallback: Legacy Path-basierte Blobs */}
+        {!metaPetalFx && (
+          <Group transform={sceneBreathTransform} clip={orbClip} blendMode="screen" opacity={0.98} layer>
+            <Group transform={rightXformCV} opacity={rightOpacityCV}>
+              <Path path={rightPath}>
+              <RadialGradient
+                  c={vec(centerX, centerY)} r={blobScale * 0.96}
+                  colors={['rgba(255,255,255,0.78)', LOBE.right, 'rgba(0,0,0,0)']}
+                  positions={[0.00, 0.22, 0.92]}
+              />
+            </Path>
+        </Group>
+            <Group transform={leftXformCV} opacity={leftOpacityCV}>
+              <Path path={leftPath}>
+              <RadialGradient
+                  c={vec(centerX, centerY)} r={blobScale * 0.96}
+                  colors={['rgba(255,255,255,0.75)', LOBE.left, 'rgba(0,0,0,0)']}
+                  positions={[0.00, 0.22, 0.92]}
+              />
+            </Path>
+        </Group>
+            <Group transform={topXformCV} opacity={topOpacityCV}>
+              <Path path={topPath}>
           <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * 0.16}
-            colors={[
-              'rgba(160,220,255,0.17)',
-              'rgba(160,220,255,0.033)',
-              'rgba(160,220,255,0.00)',
-            ]}
-            positions={[0.00, 0.46, 1.00]}
+                  c={vec(centerX, centerY)} r={blobScale * 0.96}
+                  colors={['rgba(255,255,255,0.72)', LOBE.top, 'rgba(0,0,0,0)']}
+                  positions={[0.00, 0.22, 0.92]}
           />
         </Path>
+                </Group>
+          </Group>
         )}
-
-
-        {/* 15. Anti-Banding Grain - sehr schwach */}
-        {!BASELINE_22 && 0.008 >= 0.003 && (
-        <Path path={Skia.Path.Make().addRect(Skia.XYWHRect(0,0,width,height))} blendMode="screen" opacity={0.008}>
-          <RadialGradient
-            c={vec(centerX, centerY)}
-            r={mainRadius * 2.0}
-            colors={['rgba(255,255,255,0.008)','rgba(255,255,255,0.004)','rgba(0,0,0,0.00)']}
-            positions={[0.00,0.50,1.00]}
-          />
-        </Path>
-        )}
-
       </Canvas>
     </View>
   );

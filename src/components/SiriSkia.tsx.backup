@@ -1,0 +1,1313 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Dimensions } from 'react-native';
+import { Canvas, Circle, SweepGradient, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader } from '@shopify/react-native-skia';
+
+interface SiriSkiaProps {
+  amplitude: number;
+  isRunning: boolean;
+  isDarkMode: boolean;
+}
+
+export default function SiriSkia({ amplitude, isRunning, isDarkMode }: SiriSkiaProps) {
+const { width, height } = Dimensions.get('window');
+const centerX = width / 2;
+  const centerY = height / 2;
+  
+  // Siri Strict Switches
+  const SIRI_STRICT = true;
+  const SHOW_SLICES = false;   // OG Siri: keine Slices/Ribbons
+  const SHOW_AO = false;       // Ambient Occlusion ausschalten
+  
+  // Siri Sweep Palette (statisch, nicht zeitbasiert)
+  // 0 rad (rechts) = Cyan, oben = Magenta
+  const SWEEP_START = -Math.PI / 2; // rotieren, so dass "oben" = 0.5 Position (Magenta)
+  const SWEEP_END   = SWEEP_START + Math.PI * 2;
+
+  const SIRI_SWEEP_COLORS = [
+    'rgba(0,199,255,0.85)',   // Cyan
+    'rgba(58,168,255,0.85)',  // Blau
+    'rgba(122,77,255,0.85)',  // Violett
+    'rgba(255,44,195,0.85)',  // Magenta
+    'rgba(255,138,76,0.85)',  // Warm
+    'rgba(0,199,255,0.85)'    // zurück zu Cyan
+  ];
+  const SIRI_SWEEP_POS = [0.00, 0.22, 0.46, 0.70, 0.92, 1.00];
+
+  const LOBE = {
+    right: 'rgba(56,225,255,0.85)',  // Cyan
+    top:   'rgba(255,79,216,0.85)',  // Magenta
+    left:  'rgba(122,77,255,0.85)',  // Violett/Blau
+  };
+
+  // SkSL Shader für Meta-Petals
+  const siriMetaPetalShader = `
+    uniform float2 u_res;
+    uniform float   u_time;
+    uniform float   u_amp;
+
+    // Orb-Zentrum in Pixeln
+    uniform float2 u_center;
+
+    // Lappen-Parameter (Top, Right, Left)
+    uniform float aTop;   uniform float LTop;   uniform float w0Top;   uniform float w1Top;   uniform float pinchTop;   uniform float bendTop;
+    uniform float aRight; uniform float LRight; uniform float w0Right; uniform float w1Right; uniform float pinchRight; uniform float bendRight;
+    uniform float aLeft;  uniform float LLeft;  uniform float w0Left;  uniform float w1Left;  uniform float pinchLeft;  uniform float bendLeft;
+
+    // Feste Siri-Hues je Lappen (0..1)
+    uniform float3 colTop;
+    uniform float3 colRight;
+    uniform float3 colLeft;
+
+    // Threshold/Weichheit für Isofläche
+    uniform float u_thresh;   // ~0.55..0.70 (siehe Tuning)
+    uniform float u_soft;     // ~0.04..0.08
+
+    // Core-Highlight im Zentrum
+    uniform float coreR1;       // px
+    uniform float coreR2;       // px
+    uniform float coreStrength; // 0..1
+
+    const float PI = 3.14159265;
+
+    struct Lobe {
+      float a;
+      float L;
+      float w0;
+      float w1;
+      float pinch;
+      float bend;
+      float3 col;
+    };
+
+    // Feld eines "Meta‑Petals" (Linsenprofil entlang der Achse; weiche S-Biegung)
+    float petalField(vec2 p, vec2 c, Lobe lb) {
+      float ca = cos(lb.a), sa = sin(lb.a);
+      vec2 ux = vec2(ca, sa);     // Achse
+      vec2 vy = vec2(-sa, ca);    // Senkrecht
+      vec2 d  = p - c;
+
+      // Param entlang Achse 0..L
+      float u = clamp(dot(d, ux), 0.0, lb.L);
+      float s = (lb.L > 1e-3) ? (u / lb.L) : 0.0;
+
+      // "Lens/Belly" Breite über s
+      float belly = sin(PI * s);
+      float w = mix(lb.w0, lb.w1, smoothstep(0.06, 0.72, s)) * (0.68 + 0.32 * belly);
+      float neck = mix(1.0, 0.78, clamp(lb.pinch, 0.0, 1.0));
+      w *= neck;
+
+      // leichte S-Krümmung
+      float curve = lb.bend * lb.L * 0.17 * (s - 0.35) * (1.0 - s);
+
+      // Abstand zur Mittelkurve
+      float v = dot(d, vy) - curve;
+
+      // Gaussian quer (v) + Ausblendung jenseits der Spitze (u)
+      float q = v / (w + 1e-3);
+      float fallU = max(0.0, (abs(dot(d, ux)) - lb.L) / (0.25 * lb.L + 1.0));
+      return exp(-(q*q)) * exp(-(fallU*fallU));
+    }
+
+    // Approximierter Gradient (für Glas-Kante/Edge-Tint)
+    vec2 gradField(vec2 p, vec2 c, Lobe lb) {
+      float eps = 1.25;
+      float f1 = petalField(p + vec2(eps, 0.0), c, lb);
+      float f2 = petalField(p - vec2(eps, 0.0), c, lb);
+      float f3 = petalField(p + vec2(0.0, eps), c, lb);
+      float f4 = petalField(p - vec2(0.0, eps), c, lb);
+      return vec2((f1 - f2) * 0.5, (f3 - f4) * 0.5);
+    }
+
+    half4 main(vec2 frag) {
+      vec2 p = frag;
+      vec2 c = u_center;
+
+      // Lappen setzen
+      Lobe t; t.a=aTop; t.L=LTop; t.w0=w0Top; t.w1=w1Top; t.pinch=pinchTop; t.bend=bendTop; t.col=colTop;
+      Lobe r; r.a=aRight; r.L=LRight; r.w0=w0Right; r.w1=w1Right; r.pinch=pinchRight; r.bend=bendRight; r.col=colRight;
+      Lobe l; l.a=aLeft; l.L=LLeft; l.w0=w0Left; l.w1=w1Left; l.pinch=pinchLeft; l.bend=bendLeft; l.col=colLeft;
+
+      // Felder + Summe
+      float Ft = petalField(p, c, t);
+      float Fr = petalField(p, c, r);
+      float Fl = petalField(p, c, l);
+      float F  = Ft + Fr + Fl;
+
+      // Alpha via Soft-Threshold
+      float alpha = smoothstep(u_thresh - u_soft, u_thresh + u_soft, F);
+
+      // Farbmix nach Beitrag
+      float inv = 1.0 / max(F, 1e-4);
+      vec3 base = (Ft * t.col + Fr * r.col + Fl * l.col) * inv;
+
+      // Glas-Edge (leichter Kanten-Schimmer)
+      vec2 g = gradField(p, c, t) + gradField(p, c, r) + gradField(p, c, l);
+      float edge = pow(clamp(length(g) * 0.85, 0.0, 1.0), 0.8);
+
+      // Fresnel-like Lift an der Kante
+      float fres = pow(1.0 - alpha, 2.0) * 0.55;
+
+      // Core-Highlight (sanft, doppelt gaussian)
+      float d2 = dot(p - c, p - c);
+      float core = coreStrength * (exp(-d2/(coreR1*coreR1)) + 0.66 * exp(-d2/(coreR2*coreR2)));
+
+      vec3 color = base + vec3(core + fres) * 0.85 + vec3(edge) * 0.10;
+
+      return half4(color, alpha);
+    }
+  `;
+  
+  // Utils
+  const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const deg = (d: number) => (d * Math.PI) / 180;
+
+  // Noise helpers for endless, non-looping animations
+  const fract = (x: number) => x - Math.floor(x);
+  const hash1 = (x: number) => fract(Math.sin(x * 127.1 + 311.7) * 43758.5453123);
+  const noise1D = (x: number, seed = 0) => {
+    const i = Math.floor(x + seed * 17.123);
+    const f = x - Math.floor(x);
+    const u = f * f * (3 - 2 * f);
+    const a = hash1(i);
+    const b = hash1(i + 1);
+    return (a * (1 - u) + b * u) * 2 - 1;
+  };
+  const fbm1D = (x: number, seed = 0, oct = 4) => {
+    let v = 0, amp = 0.5, freq = 1.0;
+    for (let o = 0; o < oct; o++) { v += amp * noise1D(x * freq, seed + o * 19.19); freq *= 2.02; amp *= 0.5; }
+    return v;
+  };
+
+  const smoothstep = (a: number, b: number, x: number) => {
+    const t = clamp((x - a) / (b - a), 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+
+  // Catmull-Rom -> Cubic helper for smooth outlines
+  type V2 = { x: number; y: number };
+  const cubicThrough = (p: any, pts: V2[]) => {
+    if (pts.length < 2) return;
+    p.moveTo(pts[0].x, pts[0].y);
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = i === 0 ? pts[i] : pts[i - 1];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = i + 2 < pts.length ? pts[i + 2] : p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+      p.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y);
+    }
+  };
+
+  // Wave-Ribbon builder: width(s) has mid "belly" + wave harmonics; bend offsets centerline.
+  const makeWaveBlobPath3D = (
+    theta: number,
+    r0: number, r1: number,              // axis start/end
+    w0: number, w1: number,              // base widths near root/toward mid
+    pinch: number,                        // 0.45..0.70 (neck)
+    bias: number,                         // -1..+1 (top/bottom asym)
+    bend: number,                         // -1..+1 lateral curvature
+    phi1: number, phi2: number,          // wave phases
+    sx: number, sy: number, sh: number    // 3D surrogate
+  ) => {
+    const p = Skia.Path.Make();
+    const steps = 40;
+    const top: V2[] = [];
+    const bot: V2[] = [];
+    const L = r1 - r0;
+
+    for (let i = 0; i <= steps; i++) {
+      const s = i / steps;               // 0..1 along axis
+      const x = r0 + L * s;
+
+      // "Lens" profile: wide in der Mitte, schlanker an Wurzel/Spitze
+      const belly = Math.sin(Math.PI * s);                       // peak at 0.5
+      const base = lerp(w0, w1, smoothstep(0.05, 0.70, s)) * (0.68 + 0.32 * belly);
+
+      // Wave modulation (2 harmonics) -> echte Formveränderung
+      // Siri-typische "atmen"-Wellen: stärkere 2. Harmonik, leicht verschobene 4.
+      const mod = 1
+        + 0.06 * Math.sin(2 * Math.PI * s + phi1)
+        + 0.03 * Math.sin(4 * Math.PI * s + phi2 + 0.35);
+
+      const width = clamp(base * mod, 0, L * 0.9);
+      const neck = lerp(1.0, 0.78, pinch);                       // neck factor (nicht zu spitz)
+      const wTop = width * neck * (1 + 0.55 * bias);
+      const wBot = width * neck * (1 - 0.55 * bias);
+
+      // gentle S-like bend of the centerline
+      const sB = s - 0.35;
+      const curve = bend * L * 0.17 * sB * (1 - s);              // etwas stärkere S-Biegung
+
+      const P = (yy: number): V2 => {
+        const localY = yy + curve;
+        const xl = sx * x + sh * localY, yl = sy * localY;
+        const ux = Math.cos(theta), uy = Math.sin(theta);
+        const vx = -Math.sin(theta), vy = Math.cos(theta);
+        return { x: centerX + ux * xl + vx * yl, y: centerY + uy * xl + vy * yl };
+      };
+
+      top.push(P(+wTop));
+      bot.push(P(-wBot));
+    }
+
+    const poly = top.concat(bot.reverse());
+    cubicThrough(p, poly);
+    p.close();
+    return p;
+  };
+
+  // Zeitlich unabhängiger Smoother für ruhige 3D-Bewegung
+  const smoothToward = (cur: number, target: number, dt: number, tau: number) =>
+    cur + (target - cur) * (1 - Math.exp(-dt / Math.max(1e-3, tau)));
+
+  // State-Packs für gekoppelte 3D-Surrogates + Morph-Kanäle pro Blob
+  const Cstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+  const Bstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+  const Mstate = { last: useValue(0), yaw: useValue(0), pit: useValue(0), rol: useValue(0), pin: useValue(0), w0: useValue(0), w1: useValue(0), bias: useValue(0), c1v: useValue(0.30), c2v: useValue(0.78), bend: useValue(0) };
+
+  // Amplitude 0..1 + Glättung
+  const ampTarget = clamp(amplitude / 100, 0, 1);
+  const [ampSmooth, setAmpSmooth] = useState(0);
+  useEffect(() => { 
+    setAmpSmooth(prev => {
+      const isAttack = ampTarget > prev;
+      const rate = isAttack ? 0.15 : 0.08; // attack/release
+      return prev + (ampTarget - prev) * rate;
+    });
+  }, [ampTarget]);
+
+  // Phase C: eigener Envelope (schneller Attack, langsamer Release)
+  const [ampEnvC, setAmpEnvC] = useState(0);
+  useEffect(() => {
+    setAmpEnvC(prev => {
+      const isAttack = ampTarget > prev;
+      const rate = isAttack ? 0.24 : 0.06;
+      return prev + (ampTarget - prev) * rate;
+    });
+  }, [ampTarget]);
+
+  // Keine globale Rotation mehr – Blobs stehen wie bei Siri übereinander
+
+  // Phase C: integrierte Phase für Mikrodynamik (kein Modulo-Flackern)
+  const lastTc = useValue(0);
+  const phaseC = useValue(0);
+
+  
+  // Siri-typische Ringfarben
+  const siriColors = ['#00C7FF','#3AA8FF','#7A4DFF','#FF2CC3','#FF8A4C','#00C7FF'];
+  
+  // Normalisierte Geometrie - Amplitude nur für subtilen Bloom
+  const baseRadius = 120;
+  const ringRadius = baseRadius; // Konstanter Ring-Radius
+  
+  // Innere Ringe für mehr Tiefe
+  const innerRadius = ringRadius * 0.6;
+  const outerGlowRadius = ringRadius * 1.4 + (ampSmooth * 8); // Amplitudengesteuert
+  
+  // Robuster Kreis-Clip statt Mask (verhindert Artefakte)
+  const orbClip = useMemo(() => {
+    const p = Skia.Path.Make();
+    p.addCircle(centerX, centerY, ringRadius);
+    return p;
+  }, [centerX, centerY, ringRadius]);
+  
+  // Rainbow-Regler (vorhanden, aber standardmäßig deaktiviert)
+  const ringAmp = Math.pow(ampSmooth, 0.75);
+  const ringWidth = lerp(0.020, 0.036, ringAmp);   // leicht schmaler
+  const ringGain  = lerp(0.24, 0.40, ringAmp);     // etwas sanfter
+  const showRing = false; // OG Siri: kein bunter Ring / kein sichtbarer Border
+  
+  const blobAlphaBase = 0.55;
+  const blobAlpha = blobAlphaBase + 0.28 * ampSmooth;
+  const blobSoft = 0.72; // reserved
+  const blobScale = ringRadius * 0.95;
+
+  // Neutrale Blobs: keine Farbverschiebung, nur Helligkeit/“Sättigung”
+  // Vorherige farbige Version deaktiviert:
+  // false && (() => {
+  //   const prevBlobColors = (hex: string, aCore = blobAlpha) => {
+  //     switch (hex.toUpperCase()) {
+  //       case '#38E1FF': return ['rgba(56,225,255,0.90)','rgba(56,225,255,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       case '#FF4FD8': return ['rgba(255,79,216,0.90)','rgba(255,79,216,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       case '#4CB6FF': return ['rgba(76,182,255,0.90)','rgba(76,182,255,0.40)',`rgba(255,255,255,${aCore * 0.10})`];
+  //       default: return [Skia.Color(hex).toString(), Skia.Color(hex).toString(), `rgba(255,255,255,${aCore * 0.10})`];
+  //     }
+  //   };
+  //   return prevBlobColors;
+  // })();
+  const blobColors = (hex: string, aCore = blobAlpha) => {
+    switch (hex.toUpperCase()) {
+      case '#38E1FF': // Cyan
+        return [
+          `rgba(56,225,255,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(56,225,255,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      case '#FF4FD8': // Magenta
+        return [
+          `rgba(255,79,216,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(255,79,216,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      case '#4CB6FF': // Blau
+        return [
+          `rgba(76,182,255,${0.20 + 0.20 * ampSmooth})`,
+          `rgba(76,182,255,${0.10 + 0.12 * ampSmooth})`,
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+      default:
+        return [
+          Skia.Color(hex).toString(),
+          Skia.Color(hex).toString(),
+          `rgba(255,255,255,${aCore * 0.04})`
+        ];
+    }
+  };
+  const blobPositions = [0.0, 0.46, 1.0];
+  
+  // Siri-Blobs: heller Kern -> satter Midtone -> weiches Tail
+  // Helper: rgba from tuple
+  const rgba = (rgb: [number, number, number], a: number) =>
+    `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`;
+  // Siri-Palette: exakte Farbspur
+  const ramp: [number, number, number][] = [
+    [0,199,255], [58,168,255], [122,77,255], [255,44,195], [255,138,76], [0,199,255]
+  ];
+  const mixRGB = (a: [number, number, number], b: [number, number, number], t: number) =>
+    [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)] as [number, number, number];
+  const colorCycle = (u: number) => {
+    const n = ramp.length - 1;
+    const x = u - Math.floor(u); // fract(u) ohne Modulo
+    const i = Math.floor(x * n);
+    const t = x * n - i;
+    return mixRGB(ramp[i], ramp[i + 1], t);
+  };
+
+  const blobStops = (rgb: [number, number, number]) => ({
+    colors: [
+      `rgba(255,255,255,${0.48 + 0.38 * ampSmooth})`,
+      rgba(rgb, 0.86),
+      rgba(rgb, 0.30),
+      'rgba(0,0,0,0.00)',
+    ],
+    positions: [0.00, 0.14, 0.72, 1.00]
+  });
+
+  // Lokales Achsensystem -> Weltkoordinaten (Winkel theta)
+  const toWorld = (theta: number, x: number, y: number) => {
+    const ux = Math.cos(theta), uy = Math.sin(theta);
+    const vx = -Math.sin(theta), vy = Math.cos(theta);
+    return { x: centerX + ux * x + vx * y, y: centerY + uy * x + vy * y };
+  };
+
+  // Blattförmiger Pfad (Basis): schmale Wurzel -> bauchige Spitze
+  const makePetalPath = (
+    theta: number,
+    r0: number, r1: number,
+    w0: number, w1: number,
+    pinch: number,             // 0.35..0.65
+    c1 = 0.33, c2 = 0.72       // Kurvenverlauf entlang der Achse
+  ) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1;
+    const L2 = r0 + (r1 - r0) * c2;
+    const P0t = toWorld(theta, r0, +w0 * pinch);
+    const P0b = toWorld(theta, r0, -w0 * pinch);
+    const C1t = toWorld(theta, L1, +((w0 + w1) * 0.55));
+    const C2t = toWorld(theta, L2, +(w1));
+    const Tip = toWorld(theta, r1, 0);
+    const C2b = toWorld(theta, L2, -(w1));
+    const C1b = toWorld(theta, L1, -((w0 + w1) * 0.55));
+    p.moveTo(P0t.x, P0t.y);
+    p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y);
+    p.close();
+    return p;
+  };
+
+
+  // Stabile Seeds für unabhängige 3D-Morphs pro Blob
+  const seeds = useMemo(() => ({
+    C: { yaw: 17, pit: 23, rol: 31, pin: 37 },
+    B: { yaw: 29, pit: 41, rol: 53, pin: 59 },
+    M: { yaw: 71, pit: 83, rol: 97, pin: 103 },
+  }), []);
+
+  // 3D-Helper für Petal-Pfade
+  const toWorld3D = (theta: number, x: number, y: number, sx: number, sy: number, sh: number) => {
+    const xl = sx * x + sh * y, yl = sy * y;
+    const ux = Math.cos(theta), uy = Math.sin(theta);
+    const vx = -Math.sin(theta), vy = Math.cos(theta);
+    return { x: centerX + ux * xl + vx * yl, y: centerY + uy * xl + vy * yl };
+  };
+
+  const makePetalPath3D = (theta: number, r0: number, r1: number, w0: number, w1: number, pinch: number, sx: number, sy: number, sh: number, c1 = 0.33, c2 = 0.72) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1, L2 = r0 + (r1 - r0) * c2;
+    const P0t = toWorld3D(theta, r0, +w0 * pinch, sx, sy, sh);
+    const P0b = toWorld3D(theta, r0, -w0 * pinch, sx, sy, sh);
+    const C1t = toWorld3D(theta, L1, +((w0 + w1) * 0.55), sx, sy, sh);
+    const C2t = toWorld3D(theta, L2, +(w1), sx, sy, sh);
+    const Tip  = toWorld3D(theta, r1, 0, sx, sy, sh);
+    const C2b = toWorld3D(theta, L2, -(w1), sx, sy, sh);
+    const C1b = toWorld3D(theta, L1, -((w0 + w1) * 0.55), sx, sy, sh);
+    p.moveTo(P0t.x, P0t.y); p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y); p.close(); return p;
+  };
+
+  // Morphing Path Builder mit Asymmetrie + Biegung
+  const makeBlobPathMorph = (
+    theta: number,
+    r0: number, r1: number,
+    w0: number, w1: number,
+    pinch: number,       // 0.45..0.70
+    bias: number,        // -1..+1 (oben/unten asym)
+    bend: number,        // -1..+1 (seitliche Biegung)
+    c1: number, c2: number,
+    sx: number, sy: number, sh: number
+  ) => {
+    const p = Skia.Path.Make();
+    const L1 = r0 + (r1 - r0) * c1;
+    const L2 = r0 + (r1 - r0) * c2;
+
+    // seitliche Biegung entlang der Achse (0=root .. 1=tip)
+    const bendAmt = r1 * 0.12 * bend;
+    const off = (s: number) => (s - 0.15) * bendAmt;
+
+    // Asymmetrie: obere/untere Kante unterschiedlich
+    const w0t = w0 * pinch * (1 + 0.60 * bias);
+    const w0b = w0 * pinch * (1 - 0.60 * bias);
+    const w1t = w1 * (1 + 0.40 * bias);
+    const w1b = w1 * (1 - 0.40 * bias);
+
+    const P = (x: number, y: number, s: number) => toWorld3D(theta, x, y + off(s), sx, sy, sh);
+    const s0 = 0, s1 = c1, s2 = c2, s3 = 1;
+
+    const P0t = P(r0, +w0t, s0);
+    const P0b = P(r0, -w0b, s0);
+    const C1t = P(L1, +((w0t + w1t) * 0.55), s1);
+    const C2t = P(L2, +(w1t), s2);
+    const Tip =  P(r1, 0, s3);
+    const C2b = P(L2, -(w1b), s2);
+    const C1b = P(L1, -((w0b + w1b) * 0.55), s1);
+
+    p.moveTo(P0t.x, P0t.y);
+    p.cubicTo(C1t.x, C1t.y, C2t.x, C2t.y, Tip.x, Tip.y);
+    p.cubicTo(C2b.x, C2b.y, C1b.x, C1b.y, P0b.x, P0b.y);
+    p.close();
+    return p;
+  };
+
+  // Feste Siri-Ausrichtung: links-oben (C), rechts-oben (B), unten (M)
+  const ANG_L = deg(125);
+  const ANG_R = deg(55);
+  const ANG_B = deg(-90);
+  
+  // Skia Clock
+  const clock = useClockValue();
+
+  // reaktive Zeit (in s)
+  const tCV = useComputedValue(() => (isRunning ? clock.current / 1000 : 0), [clock, isRunning]);
+
+  // sanfte globale Drift (kleiner Orientierungswobble)
+  const thetaDriftCV = useComputedValue(() => 0.18 * Math.sin(tCV.current * 0.35), [tCV]);
+
+  // globale Orb-Neigung → anisotrope Skalierung + Shear (Siri-Glaslook)
+  const tiltCV = useComputedValue(() => {
+    const t = tCV.current;
+    const yaw   = 0.06 * Math.sin(t * 0.42 + 0.6);
+    const pitch = 0.08 * Math.sin(t * 0.37 - 0.8);
+    const roll  = 0.10 * Math.sin(t * 0.30 + 2.2);
+    return {
+      sx: 1 + 0.20 * yaw,
+      sy: 1 - 0.16 * pitch,
+      sh: 0.22 * roll,
+    };
+  }, [tCV]);
+
+  // per-Blob Mikrotilt (leicht phasenversetzt für Parallaxe)
+  const microTilt = (phase: number) => useComputedValue(() => {
+    const t = tCV.current + phase;
+    const base = tiltCV.current;
+      return {
+      sx: base.sx * (1 + 0.05 * Math.sin(t * 0.9)),
+      sy: base.sy * (1 - 0.05 * Math.sin(t * 0.85)),
+      sh: base.sh + 0.06 * Math.sin(t * 1.1),
+    };
+  }, [tCV, tiltCV]);
+
+  const topTiltCV   = microTilt(0.0);
+  const rightTiltCV = microTilt(2.1);
+  const leftTiltCV  = microTilt(4.2);
+
+  // Orbitale Parallaxe: Blobs kreisen leicht um das Zentrum (echter Siri-Move)
+  const orbitCV = useComputedValue(() => {
+    const t = tCV.current;
+    const Ax = ringRadius * 0.05;  // x-Amplitude
+    const Ay = ringRadius * 0.07;  // y-Amplitude (Tiefe)
+    return {
+      top:   { x:  Ax * Math.sin(t * 0.65 + 2.1), y: -Ay * Math.cos(t * 0.62 + 0.7) },
+      right: { x:  Ax * Math.cos(t * 0.58 + 0.2), y:  Ay * Math.sin(t * 0.70 + 1.6) },
+      left:  { x: -Ax * Math.cos(t * 0.60 + 2.6), y: -Ay * Math.sin(t * 0.72 + 3.2) },
+    };
+  }, [tCV]);
+
+  // Transform-CVs mit einfacher Tiefen-Skalierung
+  const depthScaleCV = useComputedValue(() => {
+    const scale = (y: number) => 1 + (y / (ringRadius * 0.80)) * 0.08;
+    const { top, right, left } = orbitCV.current;
+    return { top: scale(top.y), right: scale(right.y), left: scale(left.y) };
+  }, [orbitCV]);
+
+  const topXformCV = useComputedValue(() => {
+    const o = orbitCV.current.top; const s = depthScaleCV.current.top;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
+  const rightXformCV = useComputedValue(() => {
+    const o = orbitCV.current.right; const s = depthScaleCV.current.right;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
+  const leftXformCV = useComputedValue(() => {
+    const o = orbitCV.current.left; const s = depthScaleCV.current.left;
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: s }, { scaleY: s },
+      { translateX: -centerX }, { translateY: -centerY },
+      { translateX: o.x }, { translateY: o.y },
+    ];
+  }, [orbitCV, depthScaleCV]);
+
+  // Frontness -> leichte Helligkeitsänderung je nach "Tiefe" (y-Position im Orbit)
+  const frontnessCV = useComputedValue(() => {
+    const f = (y: number) => clamp(0.85 + (y / (ringRadius * 0.12)) * 0.15, 0.80, 1.00);
+    const { top, right, left } = orbitCV.current;
+    return { top: f(top.y), right: f(right.y), left: f(left.y) };
+  }, [orbitCV]);
+  const topOpacityCV   = useComputedValue(() => frontnessCV.current.top,   [frontnessCV]);
+  const rightOpacityCV = useComputedValue(() => frontnessCV.current.right, [frontnessCV]);
+  const leftOpacityCV  = useComputedValue(() => frontnessCV.current.left,  [frontnessCV]);
+
+  // Breath muss ebenso auf clock hören
+  const breath = useComputedValue(() => {
+    const t = tCV.current;
+    const n = fbm1D(t * 0.08, 901, 4);
+    return 0.5 + 0.5 * n;
+  }, [tCV]);
+
+  const sceneBreathTransform = useComputedValue(() => {
+    const depth = lerp(0.018, 0.046, ampSmooth);
+    const scale = 1 + depth * (breath.current * 2 - 1);
+    return [
+      { translateX: centerX }, { translateY: centerY },
+      { scaleX: scale }, { scaleY: scale },
+      { translateX: -centerX }, { translateY: -centerY },
+    ];
+  }, [breath, ampSmooth]);
+
+  // Farb-Cycling (nach tCV-Deklaration)
+  const colorC = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.00) % 1), [tCV]);
+  const colorB = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.33) % 1), [tCV]);
+  const colorM = useComputedValue(() => colorCycle(((tCV.current) * 0.04 + 0.66) % 1), [tCV]);
+
+  // SkSL RuntimeShader für Meta-Petals
+  const metaPetalShader = useMemo(() => {
+    const effect = Skia.RuntimeEffect.Make(siriMetaPetalShader);
+    return effect;
+  }, []);
+
+  // Uniform-Parameter für SkSL Shader
+  const metaPetalUniforms = useComputedValue(() => {
+    const t = tCV.current;
+    const amp = ampSmooth;
+    
+    // Lappen-Parameter (Top, Right, Left)
+    const topAngle = deg(-90) + 0.04 * Math.sin(t * 0.28 + 0.9);
+    const rightAngle = deg(30) + 0.04 * Math.sin(t * 0.30 + 2.1);
+    const leftAngle = deg(210) + 0.04 * Math.sin(t * 0.29 + 4.2);
+    
+    const topL = blobScale * (0.66 + 0.26 * amp + 0.008 * Math.sin(t * 0.30));
+    const rightL = blobScale * (0.68 + 0.24 * amp + 0.008 * Math.sin(t * 0.28 + 0.7));
+    const leftL = blobScale * (0.67 + 0.25 * amp + 0.008 * Math.sin(t * 0.31 + 1.1));
+    
+    const topW0 = blobScale * (0.16 + 0.10 * (1 - amp));
+    const rightW0 = blobScale * (0.14 + 0.10 * (1 - amp));
+    const leftW0 = blobScale * (0.15 + 0.10 * (1 - amp));
+    
+    const topW1 = blobScale * (0.36 + 0.20 * (1 - amp));
+    const rightW1 = blobScale * (0.34 + 0.22 * (1 - amp));
+    const leftW1 = blobScale * (0.35 + 0.22 * (1 - amp));
+    
+    const topPinch = 0.56 + 0.18 * amp + 0.01 * Math.sin(t * 0.40);
+    const rightPinch = 0.56 + 0.17 * amp + 0.01 * Math.sin(t * 0.36 + 0.6);
+    const leftPinch = 0.57 + 0.17 * amp + 0.01 * Math.sin(t * 0.40 + 1.2);
+    
+    const topBend = 0.12;
+    const rightBend = 0.10;
+    const leftBend = 0.11;
+    
+    // Siri-Farben (RGB 0..1)
+    const colTop = [255/255, 79/255, 216/255];    // Magenta
+    const colRight = [56/255, 225/255, 255/255];  // Cyan
+    const colLeft = [122/255, 77/255, 255/255];   // Violett
+    
+    // Core-Highlight Parameter
+    const corePulse = 1.0 + 0.05 * Math.sin(t * 1.0);
+    const coreR1 = blobScale * 0.11 * corePulse;
+    const coreR2 = blobScale * 0.09 * corePulse;
+    const coreStrength = 0.85;
+    
+    return {
+      u_res: [width, height],
+      u_time: t,
+      u_amp: amp,
+      u_center: [centerX, centerY],
+      
+      // Top Lappen
+      aTop: topAngle,
+      LTop: topL,
+      w0Top: topW0,
+      w1Top: topW1,
+      pinchTop: topPinch,
+      bendTop: topBend,
+      colTop: colTop,
+      
+      // Right Lappen
+      aRight: rightAngle,
+      LRight: rightL,
+      w0Right: rightW0,
+      w1Right: rightW1,
+      pinchRight: rightPinch,
+      bendRight: rightBend,
+      colRight: colRight,
+      
+      // Left Lappen
+      aLeft: leftAngle,
+      LLeft: leftL,
+      w0Left: leftW0,
+      w1Left: leftW1,
+      pinchLeft: leftPinch,
+      bendLeft: leftBend,
+      colLeft: colLeft,
+      
+      // Shader-Parameter
+      u_thresh: 0.62,
+      u_soft: 0.06,
+      coreR1: coreR1,
+      coreR2: coreR2,
+      coreStrength: coreStrength,
+    };
+  }, [tCV, ampSmooth, width, height, centerX, centerY, blobScale]);
+
+  // Legacy Path-basierte Blobs (für Fallback)
+  const topPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = topTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(-90) + 0.04 * Math.sin(t * 0.28 + 0.9);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.66 + 0.26 * amp + 0.008 * Math.sin(t * 0.30));
+    const w0 = blobScale * (0.16 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.36 + 0.20 * (1 - amp));
+    const pinch = 0.56 + 0.18 * amp + 0.01 * Math.sin(t * 0.40);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, topTiltCV]);
+
+  const rightPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = rightTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(30) + 0.04 * Math.sin(t * 0.30 + 2.1);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.68 + 0.24 * amp + 0.008 * Math.sin(t * 0.28 + 0.7));
+    const w0 = blobScale * (0.14 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.34 + 0.22 * (1 - amp));
+    const pinch = 0.56 + 0.17 * amp + 0.01 * Math.sin(t * 0.36 + 0.6);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, rightTiltCV]);
+
+  const leftPath = useComputedValue(() => {
+    const t = tCV.current;
+    const { sx, sy, sh } = leftTiltCV.current;
+    const amp = ampSmooth;
+    const theta = deg(210) + 0.04 * Math.sin(t * 0.29 + 4.2);
+    const r0 = ringRadius * 0.010;
+    const r1 = blobScale * (0.67 + 0.25 * amp + 0.008 * Math.sin(t * 0.31 + 1.1));
+    const w0 = blobScale * (0.15 + 0.10 * (1 - amp));
+    const w1 = blobScale * (0.35 + 0.22 * (1 - amp));
+    const pinch = 0.57 + 0.17 * amp + 0.01 * Math.sin(t * 0.40 + 1.2);
+    return makePetalPath3D(theta, r0, r1, w0, w1, pinch, sx, sy, sh, 0.30, 0.74);
+  }, [tCV, leftTiltCV]);
+
+  // Horizontaler Slice (fast-morphing ribbon crossing center)
+  const ribbonPath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(0) + 0.10 * Math.sin(t * 0.45);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.74 + 0.02 * Math.sin(t * 0.7));
+    const w0 = blobScale * (0.10 + 0.03 * fbm1D(t * 0.9, 771, 3));
+    const w1 = blobScale * (0.18 + 0.04 * fbm1D(t * 1.1, 773, 3));
+    const pinch = 0.72 + 0.05 * fbm1D(t * 0.6, 775, 3);
+    const bias = 0.02 * Math.sin(t * 0.9);
+    const bend = 0.24 * fbm1D(t * 0.8, 777, 3);
+    const phi1 = t * 3.2, phi2 = t * 5.1;  // Schneller als Blobs (3.2x, 5.1x vs max 1.6x)
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  // Drei individuelle Slice-Paths mit unterschiedlichen Charakteristika
+  const topSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(90) + 0.08 * Math.sin(t * 0.4);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.72 + 0.03 * Math.sin(t * 0.6));
+    const w0 = blobScale * (0.16 + 0.06 * fbm1D(t * 0.8, 801, 3));
+    const w1 = blobScale * (0.28 + 0.06 * fbm1D(t * 1.0, 803, 3));
+    const pinch = 0.74 + 0.04 * fbm1D(t * 0.5, 805, 3);     // Top: schlank, stark gepincht
+    const bias = 0.0;
+    const bend = 0.14 * fbm1D(t * 0.7, 807, 3);             // leicht positiv
+    const phi1 = t * 0.9, phi2 = t * 1.2;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  const rightSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(0) + 0.10 * Math.sin(t * 0.45);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.76 + 0.02 * Math.sin(t * 0.5));
+    const w0 = blobScale * (0.20 + 0.06 * fbm1D(t * 0.9, 811, 3));
+    const w1 = blobScale * (0.30 + 0.06 * fbm1D(t * 1.1, 813, 3));
+    const pinch = 0.59 + 0.03 * fbm1D(t * 0.4, 815, 3);     // Rechts: flacher, breiter
+    const bias = 0.035 * Math.sin(t * 0.8);                 // leicht positiv
+    const bend = 0.0;
+    const phi1 = t * 1.2, phi2 = t * 1.6;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+
+  const leftSlicePath = useComputedValue(() => {
+    const t = tCV.current;
+    const theta = deg(180) + 0.12 * Math.sin(t * 0.5);
+    const r0 = ringRadius * 0.015, r1 = blobScale * (0.78 + 0.04 * Math.sin(t * 0.8));
+    const w0 = blobScale * (0.22 + 0.08 * fbm1D(t * 0.7, 821, 3));
+    const w1 = blobScale * (0.32 + 0.08 * fbm1D(t * 0.9, 823, 3));
+    const pinch = 0.62 + 0.04 * fbm1D(t * 0.6, 825, 3);     // Links: bauchiger
+    const bias = 0.0;
+    const bend = -0.15 * fbm1D(t * 0.6, 827, 3);            // leicht negativ
+    const phi1 = t * 1.05, phi2 = t * 1.45;
+    return makeWaveBlobPath3D(theta, r0, r1, w0, w1, pinch, bias, bend, phi1, phi2, 1, 1, 0.0);
+  }, [tCV]);
+  
+  // Vorherige neutrale Blob-Farbgebung (nur Intensität) deaktiviert beibehalten:
+  // false && (() => {
+  //   const neutralBlobColors = (_hex: string, aCore = blobAlpha) => ([
+  //     `rgba(245,250,255,${0.16 + 0.16 * ampSmooth})`,
+  //     `rgba(230,240,255,${0.08 + 0.10 * ampSmooth})`,
+  //     `rgba(255,255,255,${Math.max(0, aCore * 0.02)})`
+  //   ]);
+  //   return neutralBlobColors;
+  // })();
+  const colorizeOpacity = 0.88; // färbt neutrale Blobs mit Siri-Farben
+
+  // Refraction Rims (dünne, mitrotierende Kantenbänder)
+  const rimWidth = 0.012 + 0.012 * ampSmooth;
+  const rimAlphaCool = 0.26 + 0.42 * ampSmooth;
+  const rimAlphaWarm = 0.22 + 0.40 * ampSmooth;
+  const rimRadialPositions = useMemo(() => ([
+    1.0 - rimWidth * 1.25,
+    1.0 - rimWidth * 0.55,
+    1.0
+  ]), [rimWidth]);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: isDarkMode ? '#0B1020' : '#0B1020' }}>
+      <Canvas style={{ width: '100%', height: '100%' }}>
+            <Group>
+          {/* Äußerer Glow - dimmer und kühler */}
+          <Circle cx={centerX} cy={centerY} r={outerGlowRadius}>
+          <RadialGradient
+            c={vec(centerX, centerY)}
+              r={outerGlowRadius}
+            colors={[
+                  'rgba(60,100,150,0.024)',
+                  'rgba(20,30,45,0.012)',
+                  'rgba(0,0,0,0.00)'
+                ]}
+                positions={[0.00, 0.38, 1.00]}
+            />
+          </Circle>
+          
+          {/* Ab hier alles innerhalb des Orbs (Clip statt Mask) */}
+            <Group transform={sceneBreathTransform} clip={orbClip}>
+              {/* Orb‑Vignette – verstärkt für Glas-Look */}
+              <Circle cx={centerX} cy={centerY} r={ringRadius}>
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                  r={ringRadius}
+            colors={[
+                    'rgba(0,0,0,0.00)',     // Center frei
+                    'rgba(14,20,30,0.18)',  // Mid - verstärkt für Glas-Look
+                    'rgba(6,10,16,0.34)'    // Edge - verstärkt
+                  ]}
+                  positions={[0.00, 0.70, 1.00]}
+                />
+              </Circle>
+              
+              {/* Große Radial-Vignette für Glas-Effekt */}
+              <Circle cx={centerX} cy={centerY} r={ringRadius * 1.1}>
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                  r={ringRadius * 1.1}
+                colors={[
+                    'rgba(0,0,0,0.00)',
+                    'rgba(8,12,20,0.18)',
+                    'rgba(4,6,12,0.28)'
+                  ]}
+                  positions={[0.0, 0.85, 1.0]}
+                />
+              </Circle>
+              {/* Dark edge soak – nimmt die AA-Kante raus */}
+              <Circle cx={centerX} cy={centerY} r={ringRadius}>
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                  r={ringRadius}
+            colors={[
+              'rgba(0,0,0,0.00)',
+                    'rgba(6,10,16,0.06)',
+                    'rgba(0,0,0,0.00)'
+            ]}
+                  positions={[0.94, 0.995, 1.00]}
+          />
+        </Circle>
+              {/* Verstärkter Rim-Highlight für Glas-Look */}
+              <Group blendMode="screen" opacity={0.7}>
+                <Circle cx={centerX} cy={centerY} r={ringRadius * 0.998}>
+                <RadialGradient
+            c={vec(centerX, centerY)}
+                    r={ringRadius * 0.998}
+            colors={[
+                      'rgba(255,255,255,0.00)',
+                      'rgba(255,255,255,0.08)',
+                      'rgba(255,255,255,0.00)'
+                    ]}
+                    positions={[0.970, 0.992, 1.00]}
+                  />
+                </Circle>
+        </Group>
+              
+              {/* Zusätzlicher äußerer Rim für Glas-Effekt */}
+              <Group blendMode="screen" opacity={0.4}>
+                <Circle cx={centerX} cy={centerY} r={ringRadius * 1.002}>
+                    <RadialGradient
+                    c={vec(centerX, centerY)}
+                    r={ringRadius * 1.002}
+            colors={[
+                      'rgba(255,255,255,0.00)',
+                      'rgba(255,255,255,0.12)',
+                      'rgba(255,255,255,0.00)'
+                    ]}
+                    positions={[0.95, 0.99, 1.00]}
+                  />
+                </Circle>
+              </Group>
+              {/* Kein separater Central Bloom – Zentrum bleibt farbneutral */}
+
+              {/* Hemisphärische Tints entfernt – Zentrum soll maximal hellen können */}
+              {/* Innen‑Haze sehr weit außen, um das Zentrum nicht zu dämpfen */}
+              <Circle cx={centerX} cy={centerY} r={ringRadius * 0.96}>
+              <RadialGradient
+                c={vec(centerX, centerY)}
+                  r={ringRadius * 0.96}
+                colors={[
+                    'rgba(160,180,220,0.014)',
+                    'rgba(120,140,180,0.008)',
+                    'rgba(0,0,0,0.00)'
+                  ]}
+                  positions={[0.40, 0.78, 1.00]}
+                />
+              </Circle>
+
+              {false && (<>
+              {/* Rainbow-Ring */}
+              <Group opacity={0.92}>
+                <Circle cx={centerX} cy={centerY} r={ringRadius}>
+                  <SweepGradient
+                c={vec(centerX, centerY)}
+                    start={0}
+                    end={Math.PI * 2}
+                    colors={siriColors}
+                    positions={[0.00, 0.22, 0.46, 0.70, 0.92, 1.00]}
+                  />
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                    r={ringRadius}
+            colors={[
+              'rgba(255,255,255,0.00)',
+                      `rgba(255,255,255,${ringGain})`,
+                      'rgba(255,255,255,0.00)',
+                    ]}
+                    positions={[
+                      1.0 - (ringWidth * 1.05),
+                      1.0 - (ringWidth * 0.58),
+                      1.00
+                    ]}
+          />
+        </Circle>
+          </Group>
+              
+              {/* Refraction Rims (Phase B) */}
+              <Group blendMode="screen" opacity={0.94}>
+                {/* Cool rim */}
+                <Circle cx={centerX} cy={centerY} r={ringRadius * 0.996}>
+                  <SweepGradient
+            c={vec(centerX, centerY)}
+                    start={0}
+                    end={Math.PI * 2}
+            colors={[
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                      `rgba(140,230,255,${rimAlphaCool})`,
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                    ]}
+                    positions={[0.10, 0.135, 0.155, 0.175, 0.50, 0.70, 0.90, 1.00]}
+                  />
+              <RadialGradient
+                    c={vec(centerX, centerY)}
+                    r={ringRadius * 0.996}
+                colors={[
+                    'rgba(255,255,255,0.00)',
+                      'rgba(255,255,255,0.14)',
+                      'rgba(255,255,255,0.00)'
+                    ]}
+                    positions={rimRadialPositions}
+                  />
+                </Circle>
+
+                {/* Warm rim */}
+                <Circle cx={centerX} cy={centerY} r={ringRadius * 0.992}>
+                  <SweepGradient
+                  c={vec(centerX, centerY)}
+                    start={0}
+                    end={Math.PI * 2}
+                colors={[
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                      `rgba(255,110,220,${rimAlphaWarm})`,
+                      'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)', 'rgba(0,0,0,0.00)',
+                    ]}
+                    positions={[0.00, 0.36, 0.58, 0.61, 0.635, 0.66, 0.88, 1.00]}
+                  />
+                  <RadialGradient
+                  c={vec(centerX, centerY)}
+                    r={ringRadius * 0.992}
+                    colors={[
+                      'rgba(255,255,255,0.00)',
+                      'rgba(255,255,255,0.12)',
+                      'rgba(255,255,255,0.00)'
+                  ]}
+                    positions={rimRadialPositions}
+                />
+                </Circle>
+        </Group>
+              </>)}
+
+              {/* Meta-Petals SkSL RuntimeShader */}
+              {metaPetalShader && (
+                <Group blendMode="screen" opacity={0.98} layer>
+                  <RuntimeShader
+                    source={metaPetalShader}
+                    uniforms={metaPetalUniforms}
+                  />
+                </Group>
+              )}
+              
+              {/* Fallback: Legacy Path-basierte Blobs */}
+              {!metaPetalShader && (
+                <Group blendMode="screen" opacity={0.98} layer> 
+                  {/* 1. LEFT/RIGHT Blobs (zuerst) */}
+                  {/* RIGHT (Cyan) — Feste Hue */}
+                  <Group blendMode="screen" transform={rightXformCV} opacity={rightOpacityCV}>
+                    <Path path={rightPath}>
+                      <RadialGradient
+                        c={vec(centerX, centerY)} r={blobScale * 0.96}
+                        colors={['rgba(255,255,255,0.78)', LOBE.right, 'rgba(0,0,0,0)']}
+                        positions={[0.00, 0.22, 0.92]}
+                      />
+                    </Path>
+                  </Group>
+
+                  {/* LEFT (Blue) — Feste Hue */}
+                  <Group blendMode="screen" transform={leftXformCV} opacity={leftOpacityCV}>
+                    <Path path={leftPath}>
+                      <RadialGradient
+                        c={vec(centerX, centerY)} r={blobScale * 0.96}
+                        colors={['rgba(255,255,255,0.75)', LOBE.left, 'rgba(0,0,0,0)']}
+                        positions={[0.00, 0.22, 0.92]}
+                      />
+                    </Path>
+                  </Group>
+
+                  {/* 2. TOP Blob (danach) */}
+                  {/* TOP (Magenta) — Feste Hue */}
+                  <Group blendMode="screen" transform={topXformCV} opacity={topOpacityCV}>
+                    <Path path={topPath}>
+                      <RadialGradient
+                        c={vec(centerX, centerY)} r={blobScale * 0.96}
+                        colors={['rgba(255,255,255,0.72)', LOBE.top, 'rgba(0,0,0,0)']}
+                        positions={[0.00, 0.22, 0.92]}
+                      />
+                    </Path>
+                  </Group>
+                </Group>
+              )}
+
+                {/* 3. Ambient Occlusion - dunkler Radialverlauf unter allen Blobs */}
+                {SHOW_AO && (
+                  <Group blendMode="multiply" opacity={0.18}>
+                    <RadialGradient
+                      c={vec(centerX, centerY)} r={blobScale * 0.55}
+                      colors={['rgba(0,0,0,0.55)','rgba(0,0,0,0)']} positions={[0.0,1.0]}
+                    />
+                  </Group>
+                )}
+
+                
+
+                {/* 5. Slice - Horizontaler Slice (fast-morphing ribbon crossing center) */}
+                {SHOW_SLICES && (
+                  <>
+                    <Group blendMode="screen" opacity={0.58}>
+                      <Path path={ribbonPath}>
+                        <LinearGradient
+                          start={vec(centerX - blobScale * 0.9, centerY)}
+                          end={vec(centerX + blobScale * 0.9, centerY)}
+                          colors={[
+                            'rgba(0,0,0,0)',
+                            'rgba(255,255,255,0.85)',
+                            'rgba(150,245,255,0.60)',
+                            'rgba(0,0,0,0)'
+                          ]}
+                          positions={[0.0, 0.46, 0.56, 1.0]}
+                        />
+                      </Path>
+                      <Blur blur={12} />
+                    </Group>
+
+                    {/* Drei individuelle Slices mit unterschiedlichen Charakteristika */}
+                    
+                    {/* Top/Blau Slice (schlank, stark gepincht) */}
+                    <Group blendMode="screen" opacity={0.52}>
+                      <Path path={topSlicePath}>
+                        <LinearGradient
+                          start={vec(centerX, centerY - blobScale * 0.8)}
+                          end={vec(centerX, centerY + blobScale * 0.8)}
+                          colors={[
+                            'rgba(0,0,0,0)',
+                            'rgba(255,255,255,0.75)',
+                            'rgba(120,200,255,0.55)',
+                            'rgba(0,0,0,0)'
+                          ]}
+                          positions={[0.0, 0.48, 0.58, 1.0]}
+                        />
+                      </Path>
+                      <Blur blur={10} />
+                    </Group>
+
+                    {/* Rechts/Cyan Slice (flacher, breiter) */}
+                    <Group blendMode="screen" opacity={0.48}>
+                      <Path path={rightSlicePath}>
+                        <LinearGradient
+                          start={vec(centerX - blobScale * 0.9, centerY)}
+                          end={vec(centerX + blobScale * 0.9, centerY)}
+                          colors={[
+                            'rgba(0,0,0,0)',
+                            'rgba(255,255,255,0.80)',
+                            'rgba(150,245,255,0.60)',
+                            'rgba(0,0,0,0)'
+                          ]}
+                          positions={[0.0, 0.44, 0.54, 1.0]}
+                        />
+                      </Path>
+                      <Blur blur={14} />
+                    </Group>
+
+                    {/* Links/Magenta Slice (bauchiger) */}
+                    <Group blendMode="screen" opacity={0.45}>
+                      <Path path={leftSlicePath}>
+                        <LinearGradient
+                          start={vec(centerX - blobScale * 0.9, centerY)}
+                          end={vec(centerX + blobScale * 0.9, centerY)}
+                          colors={[
+                            'rgba(0,0,0,0)',
+                            'rgba(255,255,255,0.70)',
+                            'rgba(255,150,200,0.50)',
+                            'rgba(0,0,0,0)'
+                          ]}
+                          positions={[0.0, 0.42, 0.52, 1.0]}
+                        />
+                      </Path>
+                      <Blur blur={16} />
+                    </Group>
+                  </>
+                )}
+
+                {/* center glow off for OG Siri */}
+
+                {/* 6. Core Highlight - ganz oben (on top), stärkerer Blur gegen harte Kanten) */}
+                <Group blendMode="screen" opacity={0.82}>
+                  {(() => {
+                    const t = tCV.current;
+                    const corePulse = 1.0 + 0.05 * Math.sin(t * 1.0);
+                    const r1 = blobScale * 0.11 * corePulse;
+                    const r2 = blobScale * 0.09 * corePulse;
+          return (
+                      <>
+                        <Group transform={[
+                          {translateX: centerX}, {translateY: centerY},
+                          {rotate: deg(-10)},
+                          {scaleX: 1.7}, {scaleY: 0.9},
+                          {translateX: -centerX}, {translateY: -centerY},
+                        ]}>
+                          <Circle c={vec(centerX, centerY)} r={r1}>
+                <RadialGradient
+                              c={vec(centerX, centerY)} r={r1}
+                              colors={['rgba(255,255,255,0.95)','rgba(255,255,255,0.0)']}
+                              positions={[0.0, 1.0]}
+                            />
+                          </Circle>
+                        </Group>
+
+                        <Group transform={[
+                          {translateX: centerX}, {translateY: centerY},
+                          {rotate: deg(+12)},
+                          {scaleX: 1.5}, {scaleY: 0.8},
+                          {translateX: -centerX}, {translateY: -centerY},
+                        ]}>
+                          <Circle c={vec(centerX, centerY)} r={r2}>
+                <RadialGradient
+                              c={vec(centerX, centerY)} r={r2}
+                              colors={['rgba(220,255,255,0.65)','rgba(255,255,255,0.0)']}
+                              positions={[0.0, 1.0]}
+                            />
+                          </Circle>
+                        </Group>
+                      </>
+                );
+              })()}
+
+                  <Blur blur={26} />
+                </Group>
+                {false && (
+                  <>
+                    {/* Test-Kreise zur Sichtbarkeitsprobe */}
+                    <Circle cx={centerX} cy={centerY} r={blobScale * 0.30} color="rgba(255,0,0,0.4)" />
+                    <Circle cx={centerX} cy={centerY} r={blobScale * 0.20} color="rgba(0,255,0,0.4)" />
+                    <Circle cx={centerX} cy={centerY} r={blobScale * 0.10} color="rgba(0,0,255,0.4)" />
+                  </>
+                )}
+
+                {/* Sheen vorerst deaktiviert */}
+            </Group>
+
+              
+
+              {/* Rainbow-Ring (deaktiviert für OG Siri) */}
+              {showRing && (
+                <Group>
+                <Circle cx={centerX} cy={centerY} r={ringRadius}>
+              <SweepGradient
+                c={vec(centerX, centerY)}
+                    start={0}
+                    end={Math.PI * 2}
+                    colors={siriColors}
+                    positions={[0.00, 0.22, 0.46, 0.70, 0.92, 1.00]}
+                />
+                  <RadialGradient
+                    c={vec(centerX, centerY)}
+                    r={ringRadius}
+                    colors={[
+                      'rgba(255,255,255,0.00)',
+                      `rgba(255,255,255,${ringGain})`,
+                      'rgba(255,255,255,0.00)',
+                    ]}
+                    positions={[1.0 - (ringWidth * 1.08), 1.0 - (ringWidth * 0.58), 1.00]}
+                  />
+                </Circle>
+            </Group>
+        )}
+
+              {/* Refraction Rims (deaktiviert für OG Siri) */}
+              {showRing && (
+              <Group
+                transform={[{ translateX: centerX }, { translateY: centerY }, { translateX: -centerX }, { translateY: -centerY }]}
+                blendMode="hardLight"
+                opacity={0.78}
+              >
+                {(() => {
+                  const coolPath = Skia.Path.Make();
+                  coolPath.addCircle(centerX, centerY, ringRadius * 0.996);
+                  const warmPath = Skia.Path.Make();
+                  warmPath.addCircle(centerX, centerY, ringRadius * 0.992);
+                  const coolStroke = ringRadius * 0.0032;
+                  const warmStroke = ringRadius * 0.0038;
+          return (
+                    <>
+                      {/* Cool glass rim */}
+                      <Path path={coolPath} style="stroke" strokeWidth={coolStroke} strokeCap="round" strokeJoin="round">
+          <SweepGradient
+                          c={vec(centerX, centerY)} start={0} end={Math.PI * 2}
+            colors={[
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)',
+                            `rgba(140,230,255,${rimAlphaCool})`,
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)',
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)','rgba(0,0,0,0.00)'
+                          ]}
+                          positions={[0.10,0.135,0.155,0.175,0.50,0.70,0.90,1.00]}
+                />
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                          r={ringRadius * 0.996}
+                          colors={['rgba(255,255,255,0.00)','rgba(255,255,255,0.12)','rgba(255,255,255,0.00)']}
+                          positions={rimRadialPositions}
+                        />
+                        <BlurMask blur={ringRadius * 0.003} style="normal" />
+        </Path>
+
+                      {/* Warm glass rim */}
+                      <Path path={warmPath} style="stroke" strokeWidth={warmStroke} strokeCap="round" strokeJoin="round">
+                <SweepGradient
+                          c={vec(centerX, centerY)} start={0} end={Math.PI * 2}
+            colors={[
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)',
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)',
+                            `rgba(255,110,220,${rimAlphaWarm})`,
+                            'rgba(0,0,0,0.00)','rgba(0,0,0,0.00)','rgba(0,0,0,0.00)'
+                          ]}
+                          positions={[0.00,0.36,0.58,0.61,0.635,0.66,0.88,1.00]}
+                        />
+          <RadialGradient
+            c={vec(centerX, centerY)}
+                          r={ringRadius * 0.992}
+                          colors={['rgba(255,255,255,0.00)','rgba(255,255,255,0.12)','rgba(255,255,255,0.00)']}
+                          positions={rimRadialPositions}
+                        />
+                        <BlurMask blur={ringRadius * 0.0035} style="normal" />
+        </Path>
+                    </>
+          );
+        })()}
+              </Group>
+              {/* Kein künstlicher Center‑Bloom: OG Siri verlässt sich auf die Blobs */}
+            </Group>
+          {/* Ende Maskenbereich */}
+        </Group>
+      </Canvas>
+    </View>
+  );
+}

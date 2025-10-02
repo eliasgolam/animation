@@ -1,4 +1,4 @@
-package com.anonymous.sirianimationtest
+package com.expo.sirianimationtest
 
 import android.os.Build
 import android.os.Bundle
