@@ -1,5 +1,5 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 
 interface Props {
   children: ReactNode;
@@ -52,9 +52,9 @@ export class ErrorBoundary extends Component<Props, State> {
           <Text style={styles.errorMessage}>
             Something went wrong with the Siri animation.
           </Text>
-          <TouchableOpacity style={styles.retryButton} onPress={this.handleRetry}>
-            <Text style={styles.retryButtonText}>Retry</Text>
-          </TouchableOpacity>
+          <Text style={styles.errorMessage}>
+            Please restart the app.
+          </Text>
         </View>
       );
     }
@@ -82,16 +82,5 @@ const styles = StyleSheet.create({
     color: '#6c757d',
     textAlign: 'center',
     marginBottom: 20,
-  },
-  retryButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
   },
 });
