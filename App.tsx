@@ -1,11 +1,6 @@
-import React from 'react';
-import { View } from 'react-native';
-import SiriMicDemo from './screens/SiriMicDemo';
+import React from "react";
+import RNDemoScreen from "./xplat-siri/demo/RNDemoScreen";
 
-export default function App() {
-  return (
-    <View style={{ flex: 1 }}>
-      <SiriMicDemo />
-    </View>
-  );
-} 
+export default function App(){
+  return <RNDemoScreen />;
+}

@@ -1,0 +1,1059 @@
+{
+  "findings": {
+    "filesScanned": 146,
+    "textFilesScanned": 88,
+    "bytesScanned": 1052783,
+    "languages": {
+      "other": {
+        "files": 5,
+        "loc": 384
+      },
+      "Gradle": {
+        "files": 3,
+        "loc": 311
+      },
+      ".keystore": {
+        "files": 1,
+        "loc": 25
+      },
+      ".pro": {
+        "files": 1,
+        "loc": 15
+      },
+      "XML": {
+        "files": 8,
+        "loc": 111
+      },
+      "Kotlin": {
+        "files": 3,
+        "loc": 129
+      },
+      ".png": {
+        "files": 12,
+        "loc": 0
+      },
+      ".jar": {
+        "files": 1,
+        "loc": 0
+      },
+      ".properties": {
+        "files": 2,
+        "loc": 68
+      },
+      ".bat": {
+        "files": 1,
+        "loc": 93
+      },
+      ".kts": {
+        "files": 1,
+        "loc": 20
+      },
+      "JSON": {
+        "files": 19,
+        "loc": 15096
+      },
+      "TypeScript/React": {
+        "files": 17,
+        "loc": 2759
+      },
+      ".pdf": {
+        "files": 12,
+        "loc": 681
+      },
+      ".svg": {
+        "files": 11,
+        "loc": 83
+      },
+      "Markdown": {
+        "files": 7,
+        "loc": 496
+      },
+      "JavaScript": {
+        "files": 4,
+        "loc": 88
+      },
+      "TypeScript": {
+        "files": 5,
+        "loc": 160
+      },
+      ".env": {
+        "files": 1,
+        "loc": 12
+      },
+      "Swift": {
+        "files": 12,
+        "loc": 486
+      },
+      "Objective-C": {
+        "files": 4,
+        "loc": 28
+      },
+      "CocoaPods": {
+        "files": 1,
+        "loc": 78
+      },
+      ".lock": {
+        "files": 1,
+        "loc": 1348
+      },
+      "C/C++ header": {
+        "files": 2,
+        "loc": 12
+      },
+      "Objective-C++": {
+        "files": 1,
+        "loc": 63
+      },
+      ".plist": {
+        "files": 2,
+        "loc": 86
+      },
+      ".xcprivacy": {
+        "files": 1,
+        "loc": 49
+      },
+      ".entitlements": {
+        "files": 1,
+        "loc": 5
+      },
+      ".storyboard": {
+        "files": 1,
+        "loc": 43
+      },
+      ".pbxproj": {
+        "files": 1,
+        "loc": 558
+      },
+      ".xcscheme": {
+        "files": 1,
+        "loc": 89
+      },
+      ".xcworkspacedata": {
+        "files": 1,
+        "loc": 11
+      },
+      "Shell": {
+        "files": 1,
+        "loc": 34
+      },
+      ".backup": {
+        "files": 1,
+        "loc": 1313
+      },
+      ".mjs": {
+        "files": 1,
+        "loc": 374
+      }
+    },
+    "indicators": {
+      "skia": [
+        {
+          "file": "CLEAN_APP_SUMMARY.md",
+          "line": 15,
+          "snippet": "- ❌ `test-skia.html` - Test HTML Datei"
+        },
+        {
+          "file": "CLEAN_APP_SUMMARY.md",
+          "line": 23,
+          "snippet": "1. **`SiriSkia.tsx`** - Haupt-Siri-Animation (Skia)"
+        },
+        {
+          "file": "metro.config.js",
+          "line": 5,
+          "snippet": "// Add support for Skia"
+        },
+        {
+          "file": "metro.config.js",
+          "line": 8,
+          "snippet": "'react-native-skia': '@shopify/react-native-skia',"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 13,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 5410,
+          "snippet": "\"node_modules/@shopify/react-native-skia\": {"
+        },
+        {
+          "file": "package.json",
+          "line": 16,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "README.md",
+          "line": 3,
+          "snippet": "A React Native project featuring a Siri-like, audio-reactive visualization built with TypeScript and @shopify/react-native-skia."
+        },
+        {
+          "file": "README.md",
+          "line": 7,
+          "snippet": "- **Frame-based Animation**: Uses Skia's `useFrameCallback` for smooth 60fps animations"
+        },
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Group, Circle, RadialGradient, useClockValue, useComputedValue, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRing.tsx",
+          "line": 2,
+          "snippet": "import { Circle, SweepGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRing.tsx",
+          "line": 4,
+          "snippet": "// Pure Skia component - NO React Native Views!"
+        },
+        {
+          "file": "src\\components\\SiriRingSimple.tsx",
+          "line": 2,
+          "snippet": "import { Circle, RadialGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRingSimple.tsx",
+          "line": 4,
+          "snippet": "// Ultra-simple fallback version - Pure Skia"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Circle, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader, Fill, Paint, Shader } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 287,
+          "snippet": "const p = Skia.Path.Make();"
+        },
+        {
+          "file": "src\\lib\\math\\spline.ts",
+          "line": 2,
+          "snippet": "import { Skia } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\lib\\math\\spline.ts",
+          "line": 6,
+          "snippet": "Sk: typeof Skia"
+        }
+      ],
+      "skottie": [],
+      "rn_skia_pkg": [
+        {
+          "file": "metro.config.js",
+          "line": 8,
+          "snippet": "'react-native-skia': '@shopify/react-native-skia',"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 13,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 5410,
+          "snippet": "\"node_modules/@shopify/react-native-skia\": {"
+        },
+        {
+          "file": "package.json",
+          "line": 16,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "README.md",
+          "line": 3,
+          "snippet": "A React Native project featuring a Siri-like, audio-reactive visualization built with TypeScript and @shopify/react-native-skia."
+        },
+        {
+          "file": "README.md",
+          "line": 33,
+          "snippet": "- **@shopify/react-native-skia**: High-performance 2D graphics"
+        },
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Group, Circle, RadialGradient, useClockValue, useComputedValue, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRing.tsx",
+          "line": 2,
+          "snippet": "import { Circle, SweepGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRingSimple.tsx",
+          "line": 2,
+          "snippet": "import { Circle, RadialGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Circle, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader, Fill, Paint, Shader } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\lib\\math\\spline.ts",
+          "line": 2,
+          "snippet": "import { Skia } from '@shopify/react-native-skia';"
+        }
+      ],
+      "lottie": [],
+      "rive": [],
+      "rn": [
+        {
+          "file": "android\\app\\build.gradle",
+          "line": 14,
+          "snippet": "commandLine(\"node\", \"-e\", \"console.log(require('react-native/package.json').version);\")"
+        },
+        {
+          "file": "android\\app\\build.gradle",
+          "line": 34,
+          "snippet": "reactNativeDir = new File([\"node\", \"--print\", \"require.resolve('react-native/package.json')\"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()"
+        },
+        {
+          "file": "android\\app\\proguard-rules.pro",
+          "line": 10,
+          "snippet": "# react-native-reanimated"
+        },
+        {
+          "file": "android\\app\\src\\main\\res\\drawable\\rn_edit_text_material.xml",
+          "line": 31,
+          "snippet": "For more info, see https://bit.ly/3CdLStv (react-native/pull/29452) and https://bit.ly/3nxOMoR."
+        },
+        {
+          "file": "android\\build.gradle",
+          "line": 19,
+          "snippet": "classpath('com.facebook.react:react-native-gradle-plugin')"
+        },
+        {
+          "file": "android\\build.gradle",
+          "line": 30,
+          "snippet": "url(new File(['node', '--print', \"require.resolve('react-native/package.json')\"].execute(null, rootDir).text.trim(), '../android'))"
+        },
+        {
+          "file": "android\\settings.gradle",
+          "line": 3,
+          "snippet": "commandLine(\"node\", \"-e\", \"console.log(require('react-native/package.json').version);\")"
+        },
+        {
+          "file": "android\\settings.gradle",
+          "line": 7,
+          "snippet": "includeBuild(new File([\"node\", \"--print\", \"require.resolve('@react-native/gradle-plugin/package.json')\"].execute(null, rootDir).text.trim()).getParentFile().toString())"
+        },
+        {
+          "file": "App.tsx",
+          "line": 2,
+          "snippet": "import { View } from 'react-native';"
+        },
+        {
+          "file": "babel.config.js",
+          "line": 6,
+          "snippet": "'react-native-reanimated/plugin',"
+        },
+        {
+          "file": "components\\ErrorBoundary.tsx",
+          "line": 2,
+          "snippet": "import { View, Text, StyleSheet } from 'react-native';"
+        },
+        {
+          "file": "ios\\Podfile",
+          "line": 2,
+          "snippet": "require File.join(File.dirname(`node --print \"require.resolve('react-native/package.json')\"`), \"scripts/react_native_pods\")"
+        },
+        {
+          "file": "ios\\Podfile",
+          "line": 20,
+          "snippet": "'react-native-config',"
+        },
+        {
+          "file": "metro.config.js",
+          "line": 8,
+          "snippet": "'react-native-skia': '@shopify/react-native-skia',"
+        },
+        {
+          "file": "metro.config.js",
+          "line": 26,
+          "snippet": "config.resolver.resolverMainFields = ['react-native', 'browser', 'main'];"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 13,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 22,
+          "snippet": "\"react-native\": \"^0.73.6\","
+        },
+        {
+          "file": "package.json",
+          "line": 16,
+          "snippet": "\"@shopify/react-native-skia\": \"0.1.221\","
+        },
+        {
+          "file": "package.json",
+          "line": 25,
+          "snippet": "\"react-native\": \"^0.73.6\","
+        },
+        {
+          "file": "README.md",
+          "line": 3,
+          "snippet": "A React Native project featuring a Siri-like, audio-reactive visualization built with TypeScript and @shopify/react-native-skia."
+        },
+        {
+          "file": "README.md",
+          "line": 33,
+          "snippet": "- **@shopify/react-native-skia**: High-performance 2D graphics"
+        },
+        {
+          "file": "screens\\SiriMicDemo.tsx",
+          "line": 2,
+          "snippet": "import { View, StatusBar } from 'react-native';"
+        },
+        {
+          "file": "screens\\SiriScreen.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\PDFImage.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, ViewStyle, Image } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\RealSVGImage.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, ViewStyle } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\RealSVGImage.tsx",
+          "line": 46,
+          "snippet": "// Da react-native-svg möglicherweise nicht korrekt funktioniert,"
+        },
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, Dimensions } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Group, Circle, RadialGradient, useClockValue, useComputedValue, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriImageAssets.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, ViewStyle, Image } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SiriRing.tsx",
+          "line": 2,
+          "snippet": "import { Circle, SweepGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriRingSimple.tsx",
+          "line": 2,
+          "snippet": "import { Circle, RadialGradient, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 2,
+          "snippet": "import { View, Dimensions } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Circle, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader, Fill, Paint, Shader } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriSVGAssets.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, ViewStyle } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SVGDemo.tsx",
+          "line": 2,
+          "snippet": "import { View, Text, StyleSheet, ScrollView } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SVGImage.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, ViewStyle } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SVGImage.tsx",
+          "line": 4,
+          "snippet": "// Fallback für react-native-svg falls nicht verfügbar"
+        },
+        {
+          "file": "src\\components\\SwiftSiriAnimation.tsx",
+          "line": 2,
+          "snippet": "import { requireNativeComponent, Platform, ViewStyle } from 'react-native';"
+        },
+        {
+          "file": "src\\components\\SwiftSiriOverlay.tsx",
+          "line": 2,
+          "snippet": "import { View, StyleSheet, Animated } from 'react-native';"
+        },
+        {
+          "file": "src\\lib\\math\\spline.ts",
+          "line": 2,
+          "snippet": "import { Skia } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\native\\SwiftSiriAnimation.tsx",
+          "line": 2,
+          "snippet": "import { Platform, requireNativeComponent, ViewStyle } from 'react-native';"
+        },
+        {
+          "file": "tsconfig.json",
+          "line": 7,
+          "snippet": "\"jsx\": \"react-native\","
+        },
+        {
+          "file": "verify-native.js",
+          "line": 2,
+          "snippet": "const { NativeModules, Platform } = require('react-native');"
+        },
+        {
+          "file": "verify-native.js",
+          "line": 9,
+          "snippet": "const UIManager = require('react-native/Libraries/ReactNative/UIManager');"
+        }
+      ],
+      "expo": [
+        {
+          "file": "android\\app\\build.gradle",
+          "line": 33,
+          "snippet": "entryFile = file([\"node\", \"-e\", \"require('expo/scripts/resolveAppEntry')\", projectRoot, \"android\", \"absolute\"].execute(null, rootDir).text.trim())"
+        },
+        {
+          "file": "android\\app\\build.gradle",
+          "line": 38,
+          "snippet": "// Use Expo CLI to bundle the app, this ensures the Metro config"
+        },
+        {
+          "file": "android\\app\\src\\main\\AndroidManifest.xml",
+          "line": 17,
+          "snippet": "<meta-data android:name=\"expo.modules.updates.ENABLED\" android:value=\"false\"/>"
+        },
+        {
+          "file": "android\\app\\src\\main\\AndroidManifest.xml",
+          "line": 18,
+          "snippet": "<meta-data android:name=\"expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH\" android:value=\"ALWAYS\"/>"
+        },
+        {
+          "file": "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainActivity.kt",
+          "line": 1,
+          "snippet": "package com.expo.sirianimationtest"
+        },
+        {
+          "file": "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainActivity.kt",
+          "line": 11,
+          "snippet": "import expo.modules.ReactActivityDelegateWrapper"
+        },
+        {
+          "file": "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainApplication.kt",
+          "line": 1,
+          "snippet": "package com.expo.sirianimationtest"
+        },
+        {
+          "file": "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainApplication.kt",
+          "line": 15,
+          "snippet": "import expo.modules.ApplicationLifecycleDispatcher"
+        },
+        {
+          "file": "android\\react-settings-plugin\\src\\main\\kotlin\\expo\\plugins\\ReactSettingsPlugin.kt",
+          "line": 1,
+          "snippet": "package expo.plugins"
+        },
+        {
+          "file": "android\\settings.gradle",
+          "line": 29,
+          "snippet": "println('\\u001B[32mUsing expo-modules-autolinking as core autolinking source\\u001B[0m')"
+        },
+        {
+          "file": "android\\settings.gradle",
+          "line": 34,
+          "snippet": "'require(require.resolve(\\'expo-modules-autolinking\\', { paths: [require.resolve(\\'expo/package.json\\')] }))(process.argv.slice(1))',"
+        },
+        {
+          "file": "app.json",
+          "line": 2,
+          "snippet": "\"expo\": {"
+        },
+        {
+          "file": "app.json",
+          "line": 21,
+          "snippet": "\"bundleIdentifier\": \"com.expo.sirianimationtest\""
+        },
+        {
+          "file": "babel.config.js",
+          "line": 4,
+          "snippet": "presets: ['babel-preset-expo'],"
+        },
+        {
+          "file": "hooks\\useMicAmplitude.ts",
+          "line": 2,
+          "snippet": "import { Audio } from 'expo-av';"
+        },
+        {
+          "file": "index.js",
+          "line": 1,
+          "snippet": "import { registerRootComponent } from 'expo';"
+        },
+        {
+          "file": "ios\\Podfile",
+          "line": 1,
+          "snippet": "require File.join(File.dirname(`node --print \"require.resolve('expo/package.json')\"`), \"scripts/autolinking\")"
+        },
+        {
+          "file": "ios\\Podfile",
+          "line": 14,
+          "snippet": "Pod::UI.puts('Using expo-modules-autolinking as core autolinking source'.green)"
+        },
+        {
+          "file": "ios\\Podfile.properties.json",
+          "line": 2,
+          "snippet": "\"expo.jsEngine\": \"hermes\","
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\AppDelegate.h",
+          "line": 3,
+          "snippet": "#import <Expo/Expo.h>"
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\AppDelegate.mm",
+          "line": 27,
+          "snippet": "return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@\".expo/.virtual-metro-entry\"];"
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\Images.xcassets\\AppIcon.appiconset\\Contents.json",
+          "line": 12,
+          "snippet": "\"author\": \"expo\""
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\Images.xcassets\\Contents.json",
+          "line": 4,
+          "snippet": "\"author\" : \"expo\""
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\Images.xcassets\\SplashScreenBackground.imageset\\Contents.json",
+          "line": 19,
+          "snippet": "\"author\": \"expo\""
+        },
+        {
+          "file": "metro.config.js",
+          "line": 1,
+          "snippet": "const { getDefaultConfig } = require('expo/metro-config');"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 11,
+          "snippet": "\"@expo/metro-runtime\": \"~3.1.3\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 12,
+          "snippet": "\"@expo/vector-icons\": \"^14.1.0\","
+        },
+        {
+          "file": "package.json",
+          "line": 4,
+          "snippet": "\"main\": \"node_modules/expo/AppEntry.js\","
+        },
+        {
+          "file": "package.json",
+          "line": 6,
+          "snippet": "\"start\": \"expo start\","
+        },
+        {
+          "file": "README.md",
+          "line": 45,
+          "snippet": "npx expo start"
+        },
+        {
+          "file": "setup-xcode.sh",
+          "line": 31,
+          "snippet": "echo \"  npx expo run:ios\""
+        },
+        {
+          "file": "src\\components\\RealSVGImage.tsx",
+          "line": 15,
+          "snippet": "// In React Native/Expo werden Assets über require() geladen"
+        },
+        {
+          "file": "tsconfig.json",
+          "line": 2,
+          "snippet": "\"extends\": \"expo/tsconfig.base\","
+        },
+        {
+          "file": "XCODE_SETUP.md",
+          "line": 41,
+          "snippet": "npx expo run:ios"
+        }
+      ],
+      "reanimated": [
+        {
+          "file": "android\\app\\proguard-rules.pro",
+          "line": 10,
+          "snippet": "# react-native-reanimated"
+        },
+        {
+          "file": "babel.config.js",
+          "line": 6,
+          "snippet": "'react-native-reanimated/plugin',"
+        },
+        {
+          "file": "package-lock.json",
+          "line": 23,
+          "snippet": "\"react-native-reanimated\": \"~3.6.2\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 5425,
+          "snippet": "\"react-native-reanimated\": \">=2.0.0\""
+        },
+        {
+          "file": "package.json",
+          "line": 26,
+          "snippet": "\"react-native-reanimated\": \"~3.6.2\","
+        },
+        {
+          "file": "README.md",
+          "line": 34,
+          "snippet": "- **react-native-reanimated**: Smooth animations"
+        }
+      ],
+      "rn_svg": [
+        {
+          "file": "package-lock.json",
+          "line": 24,
+          "snippet": "\"react-native-svg\": \"^15.13.0\","
+        },
+        {
+          "file": "package-lock.json",
+          "line": 12228,
+          "snippet": "\"node_modules/react-native-svg\": {"
+        },
+        {
+          "file": "package.json",
+          "line": 27,
+          "snippet": "\"react-native-svg\": \"^15.13.0\","
+        },
+        {
+          "file": "src\\components\\RealSVGImage.tsx",
+          "line": 46,
+          "snippet": "// Da react-native-svg möglicherweise nicht korrekt funktioniert,"
+        },
+        {
+          "file": "src\\components\\SVGImage.tsx",
+          "line": 4,
+          "snippet": "// Fallback für react-native-svg falls nicht verfügbar"
+        },
+        {
+          "file": "src\\components\\SVGImage.tsx",
+          "line": 8,
+          "snippet": "const svgModule = require('react-native-svg');"
+        }
+      ],
+      "canvas": [
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Group, Circle, RadialGradient, useClockValue, useComputedValue, vec } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriAnimationView.tsx",
+          "line": 107,
+          "snippet": "<Canvas style={styles.canvas}>"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 3,
+          "snippet": "import { Canvas, Circle, RadialGradient, LinearGradient, vec, Group, Path, BlurMask, Blur, useClockValue, useComputedValue, Skia, useValue, RuntimeShader, Fill, Paint, Shader } from '@shopify/react-native-skia';"
+        },
+        {
+          "file": "src\\components\\SiriSkia.tsx",
+          "line": 997,
+          "snippet": "<Canvas style={{ width: '100%', height: '100%' }}>"
+        }
+      ],
+      "pdf_js": [],
+      "swiftui": [
+        {
+          "file": "Assets_Setup_Guide.md",
+          "line": 31,
+          "snippet": "### **4. SwiftUI Integration**"
+        },
+        {
+          "file": "Assets_Setup_Guide.md",
+          "line": 40,
+          "snippet": "Nach dem Import sollten alle PDFs in SwiftUI verfügbar sein:"
+        },
+        {
+          "file": "CLEAN_APP_SUMMARY.md",
+          "line": 24,
+          "snippet": "2. **`SiriOverlayView.swift`** - SwiftUI Overlay-Animation"
+        },
+        {
+          "file": "CLEAN_APP_SUMMARY.md",
+          "line": 25,
+          "snippet": "3. **`SiriAnimationView.swift`** - SwiftUI Haupt-Animation"
+        },
+        {
+          "file": "ios\\NativeSiri\\SiriAnimationContainer.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "ios\\NativeSiri\\SiriAnimationView.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "ios\\SiriAnimationContainer.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "ios\\SiriAnimationView.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "PDF_Assets_Setup.md",
+          "line": 30,
+          "snippet": "### **3. SwiftUI-Integration**"
+        },
+        {
+          "file": "PDF_Assets_Setup.md",
+          "line": 52,
+          "snippet": "**Perfect! Nach dem manuellen Import funktioniert die SwiftUI-Animation mit echten PDF-Vektoren!** 🎉"
+        },
+        {
+          "file": "SCHNELLE_XCODE_ANLEITUNG.md",
+          "line": 61,
+          "snippet": "- ✅ **Oben (30%)**: Native SwiftUI-Animation mit **echten PDF-Assets**"
+        },
+        {
+          "file": "screens\\SiriMicDemo.tsx",
+          "line": 23,
+          "snippet": "{/* SwiftUI SiriAnimation (oben 30%) - Echte PDF-Assets aus Assets.xcassets */}"
+        },
+        {
+          "file": "SiriAnimationContainer.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "SiriAnimationView.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "SiriOverlayView.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "src\\components\\SwiftSiriOverlay.tsx",
+          "line": 9,
+          "snippet": "// SwiftUI SiriOverlayView als React Native Komponente"
+        },
+        {
+          "file": "src\\components\\SwiftSiriOverlay.tsx",
+          "line": 10,
+          "snippet": "// Diese Komponente simuliert die SwiftUI Animation"
+        },
+        {
+          "file": "SVGImage.swift",
+          "line": 1,
+          "snippet": "import SwiftUI"
+        },
+        {
+          "file": "SwiftSVG_Setup.md",
+          "line": 36,
+          "snippet": "## 🔧 Alternative: SwiftSVG durch SwiftUI ersetzen"
+        },
+        {
+          "file": "SwiftSVG_Setup.md",
+          "line": 38,
+          "snippet": "Falls SwiftSVG Probleme verursacht, kann `SVGImage` durch eine einfache SwiftUI-Implementierung ersetzt werden:"
+        },
+        {
+          "file": "verify-native.js",
+          "line": 1,
+          "snippet": "// Verifikation der nativen SwiftUI-Animation"
+        },
+        {
+          "file": "verify-native.js",
+          "line": 4,
+          "snippet": "console.log('🔍 Verifikation der nativen SwiftUI-Animation...');"
+        },
+        {
+          "file": "XCODE_SETUP.md",
+          "line": 1,
+          "snippet": "# Xcode Setup für Native SwiftUI-Animation"
+        },
+        {
+          "file": "XCODE_SETUP.md",
+          "line": 46,
+          "snippet": "- ✅ Native SwiftUI-Animation mit echten PDF-Assets oben (30%)"
+        }
+      ],
+      "uikit": [
+        {
+          "file": "ios\\SiriAnimationTest\\AppDelegate.h",
+          "line": 2,
+          "snippet": "#import <UIKit/UIKit.h>"
+        },
+        {
+          "file": "ios\\SiriAnimationTest\\main.m",
+          "line": 1,
+          "snippet": "#import <UIKit/UIKit.h>"
+        }
+      ],
+      "coreanimation": [],
+      "metal": []
+    },
+    "swiftFiles": [
+      "ios\\NativeSiri\\SiriAnimationContainer.swift",
+      "ios\\NativeSiri\\SiriAnimationView.swift",
+      "ios\\NativeSiri\\SiriAnimationViewManager.swift",
+      "ios\\SiriAnimationContainer.swift",
+      "ios\\SiriAnimationTest\\noop-file.swift",
+      "ios\\SiriAnimationView.swift",
+      "ios\\SiriAnimationViewManager.swift",
+      "SiriAnimationContainer.swift",
+      "SiriAnimationView.swift",
+      "SiriAnimationViewManager.swift",
+      "SiriOverlayView.swift",
+      "SVGImage.swift"
+    ],
+    "androidFiles": [
+      "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainActivity.kt",
+      "android\\app\\src\\main\\java\\com\\expo\\sirianimationtest\\MainApplication.kt",
+      "android\\react-settings-plugin\\src\\main\\kotlin\\expo\\plugins\\ReactSettingsPlugin.kt"
+    ],
+    "iosSignals": {
+      "podfile": true,
+      "xcodeproj": true,
+      "xcworkspace": true
+    },
+    "androidSignals": {
+      "gradle": true,
+      "settingsGradle": true
+    },
+    "packageJson": {
+      "name": "siri-animation-test",
+      "version": "1.0.0",
+      "main": "node_modules/expo/AppEntry.js",
+      "scripts": {
+        "start": "expo start",
+        "android": "expo run:android",
+        "ios": "expo run:ios",
+        "web": "expo start --web",
+        "audit:fast": "node tools/audit.mjs --fast",
+        "audit:deep": "node tools/audit.mjs --deep"
+      },
+      "dependencies": {
+        "@expo/metro-runtime": "~3.1.3",
+        "@expo/vector-icons": "^14.1.0",
+        "@shopify/react-native-skia": "0.1.221",
+        "expo": "~50.0.0",
+        "expo-audio": "~0.4.9",
+        "expo-av": "~13.10.6",
+        "expo-font": "~11.10.3",
+        "expo-status-bar": "~1.11.1",
+        "hermes-parser": "^0.31.0",
+        "react": "18.2.0",
+        "react-dom": "18.2.0",
+        "react-native": "^0.73.6",
+        "react-native-reanimated": "~3.6.2",
+        "react-native-svg": "^15.13.0",
+        "react-native-web": "~0.19.10",
+        "react-native-webview": "^13.16.0",
+        "siriwave": "^2.4.0"
+      },
+      "devDependencies": {
+        "@babel/core": "^7.20.0",
+        "@types/react": "~18.2.45",
+        "typescript": "^5.1.3"
+      },
+      "private": true
+    },
+    "deps": {
+      "@expo/metro-runtime": "~3.1.3",
+      "@expo/vector-icons": "^14.1.0",
+      "@shopify/react-native-skia": "0.1.221",
+      "expo": "~50.0.0",
+      "expo-audio": "~0.4.9",
+      "expo-av": "~13.10.6",
+      "expo-font": "~11.10.3",
+      "expo-status-bar": "~1.11.1",
+      "hermes-parser": "^0.31.0",
+      "react": "18.2.0",
+      "react-dom": "18.2.0",
+      "react-native": "^0.73.6",
+      "react-native-reanimated": "~3.6.2",
+      "react-native-svg": "^15.13.0",
+      "react-native-web": "~0.19.10",
+      "react-native-webview": "^13.16.0",
+      "siriwave": "^2.4.0"
+    },
+    "devDeps": {
+      "@babel/core": "^7.20.0",
+      "@types/react": "~18.2.45",
+      "typescript": "^5.1.3"
+    },
+    "repo": {
+      "remote": "https://github.com/eliasgolam/animation.git",
+      "branch": "main",
+      "lastCommit": "9405c6e — moey (2025-10-03 14:57:33 +0200)"
+    }
+  },
+  "assets": {
+    "svg": [
+      "assets\\blue-middle.svg",
+      "assets\\blue-right.svg",
+      "assets\\bottom-pink.svg",
+      "assets\\green-left-1.svg",
+      "assets\\green-left.svg",
+      "assets\\highlight.svg",
+      "assets\\icon-bg.svg",
+      "assets\\Intersect.svg",
+      "assets\\pink-left.svg",
+      "assets\\pink-top.svg",
+      "assets\\shadow.svg"
+    ],
+    "pdf": [
+      "assets\\blue-middle.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\blue-middle.imageset\\blue-middle.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\blue-right.imageset\\blue-right.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\bottom-pink.imageset\\bottom-pink.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\green-left-1.imageset\\green-left-1.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\green-left.imageset\\green-left.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\highlight.imageset\\highlight.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\icon-bg.imageset\\icon-bg.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\Intersect.imageset\\Intersect.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\pink-left.imageset\\pink-left.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\pink-top.imageset\\pink-top.pdf",
+      "ios\\SiriAnimationTest\\Images.xcassets\\shadow.imageset\\shadow.pdf"
+    ]
+  },
+  "summary": {
+    "hasRN": true,
+    "hasExpo": true,
+    "hasRNSkia": true,
+    "hasLottie": false,
+    "hasRive": false,
+    "hasRNSVG": true,
+    "hasPDF": true,
+    "hasSwiftOnlySignals": true,
+    "hasAndroidSignals": true,
+    "approaches": [
+      "A) Skia/Skottie-basiert (React Native Skia o. ä.)",
+      "B) Komposition aus SVG/PDF (react-native-svg / PDF-Libs)"
+    ]
+  }
+}
